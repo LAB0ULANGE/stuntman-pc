@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -1068,6 +1069,44 @@ void PadmanSetActAlignIsDone() {
     ps2host::DeliverIopReply();
 }
 
+// libmc's sceMcGetEntSpace (mcserv procedure 0x12, mcserv.cpp): a directory's
+// free entries, two to a cluster with "." and ".." counted; -4 for none.
+void McservCountsFreeEntries() {
+    namespace fs = std::filesystem;
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const fs::path card = fs::temp_directory_path() / "ps2host_tests_mcserv";
+    std::error_code error;
+    fs::remove_all(card, error);
+    fs::create_directories(card / "ONEFILE", error);
+    fs::create_directories(card / "EMPTY", error);
+    { std::ofstream(card / "ONEFILE" / "data") << "x"; }
+    const std::string saved = ps2host::mc2::CardDirectory();
+    ps2host::mc2::SetCardDirectory(card.u8string());
+    const u32 receive = 0x01E00000u, answer = 0x01E05000u;
+    ps2host::InstallMcserv();
+    const u32 server = BindSifServer(0x80000400u, receive);
+    auto space = [&](const char* directory) {
+        std::vector<u32> request(0x30 / 4 + 16, 0);         // port 0, slot 0; the path at +0x14
+        char* path = reinterpret_cast<char*>(request.data()) + 0x14;
+        std::strcpy(path, directory);
+        std::vector<u32> call(16, 0);
+        call[2] = 0x8000000Au;
+        call[8] = 0x12;
+        call[10] = answer;
+        call[11] = 4;
+        call[13] = server;
+        m.Write(answer, 0xEEEEEEEEu, 4);
+        SendSifPacket(call, request);
+        ps2host::DeliverIopReply();
+        return s32(m.Read(answer, 4));
+    };
+    Check(space("ONEFILE") == 1, "sceMcGetEntSpace: one entry free beside . .. and a file");
+    Check(space("EMPTY") == 0, "sceMcGetEntSpace: none free in an empty directory's cluster");
+    Check(space("MISSING") == -4, "sceMcGetEntSpace: no such directory");
+    ps2host::mc2::SetCardDirectory(saved);
+    fs::remove_all(card, error);
+}
+
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
 // listing the game's "open" reads sizes from, the answers it maps to errors.
 void MemoryCardKeepsSaves() {
@@ -1667,6 +1706,7 @@ int main() {
     HostServersSendCommandsAfterTheirAnswer();
     FileIoCompletesAsynchronousRequests();
     PadmanSetActAlignIsDone();
+    McservCountsFreeEntries();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();

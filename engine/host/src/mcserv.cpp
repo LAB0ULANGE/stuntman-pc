@@ -33,6 +33,8 @@
  *         size, attributes, name at +0x20), +0x14 a path with * and ?
  *   0x0E  setfileinfo (accepted)  0x0F  delete: +0x14 path
  *   0x10  format (the directory is always formatted)
+ *   0x12  getentspace: +0 port, +4 slot, +0x14 a directory; result its free
+ *         entries (two to a cluster, "." and ".." counted), -4 when none
  *   0x14  accepted              0x15  slots on a port: 1
  *
  * Errors: -4 no such entry, -5 refused, -7 too many open.
@@ -321,6 +323,20 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& data) {
                 ++count;
             }
             return Result(count);
+        }
+        case 0x12: {
+            // getentspace: the directory's free entries - what can be made in
+            // it before it takes another cluster. Entries are 512 bytes, two
+            // to a 1 KB cluster, "." and ".." among them; no directory, -4.
+            if (!Present(At(data, 0), At(data, 4))) return Result(kNoCard);
+            fs::path path;
+            if (!HostPath(PathAt(data, 0x14), &path) || !fs::is_directory(path, error)) return Result(kNoEntry);
+            u32 used = 2;
+            for (const auto& e : fs::directory_iterator(path, error)) {
+                (void)e;
+                ++used;
+            }
+            return Result(s32((used + 1) / 2 * 2 - used));
         }
         case 0x0F: {
             if (!Present(At(data, 0), At(data, 4))) return Result(kNoCard);
