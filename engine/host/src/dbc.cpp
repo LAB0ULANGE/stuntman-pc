@@ -231,7 +231,8 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& request) {
  *   +0x58 u32 frame number (libpad reads the frame with the larger)
  *   +0x50 u16 mode table (pad types: 4 digital, 7 DualShock), +0x64 2 (a
  *         controller with modes), +0x65 the mode ID, +0x68 modes, +0x69 the
- *         current mode, +0x6A actuators
+ *         current mode, +0x6A actuators, +0x6B combinations of them (the
+ *         first at +0x40: how many actuators, then which)
  *   +0x70 state (6: stable), +0x71 request state (0: done, 2: busy),
  *   +0x72 1 (a controller is there)
  */
@@ -321,6 +322,14 @@ void PadmanFrame() {
         m.Write(f + 0x68, 2, 1);
         m.Write(f + 0x69, 1, 1);
         m.Write(f + 0x6A, 2, 1);
+        // One combination of the actuators: the two motors (scePadInfoComb,
+        // libpad 2.4: the count at +0x6B, combination 0 at +0x40 - how many,
+        // then which), as a DualShock 2 reports. Stuntman counts a controller
+        // without one as not usable.
+        m.Write(f + 0x6B, 1, 1);
+        m.Write(f + 0x40, 2, 1);
+        m.Write(f + 0x41, 0, 1);
+        m.Write(f + 0x42, 1, 1);
         m.Write(f + 0x72, 1, 1);
     }
 }

@@ -1047,6 +1047,25 @@ void PadmanSetActAlignIsDone() {
     Check(m.Read(answer + 0xC, 4) == 1 && m.Read(answer + 0x14, 4) == 1,
           "scePadSetActAlign answered done at +0xC (libpad 2.3) and +0x14 (2.4)");
     ps2host::DeliverIopReply();                              // its RPC end
+
+    // A controller's frame tells of its actuators' combination (scePadInfoComb):
+    // one, of the two motors.
+    const u32 area = 0x01E06000u;
+    for (u32 i = 0; i < 0x100; i += 4) m.Write(area + i, 0, 4);
+    std::vector<u32> open(0x20, 0);
+    open[0] = 0x01;                                          // scePadPortOpen
+    open[4] = area;                                          // +0x10: the EE pad area
+    SendSifPacket(call, open);
+    ps2host::DeliverIopReply();
+    ps2host::DbcFrame();
+    const u32 f = m.Read(area + 0x58, 4) > m.Read(area + 0xD8, 4) ? area : area + 0x80;
+    Check(m.Read(f + 0x6A, 1) == 2 && m.Read(f + 0x6B, 1) == 1 && m.Read(f + 0x40, 1) == 2 &&
+              m.Read(f + 0x41, 1) == 0 && m.Read(f + 0x42, 1) == 1,
+          "the pad's frame: two actuators, one combination of both");
+    std::vector<u32> close(0x20, 0);
+    close[0] = 0x0E;                                         // scePadPortClose, port 0 slot 0
+    SendSifPacket(call, close);
+    ps2host::DeliverIopReply();
 }
 
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
