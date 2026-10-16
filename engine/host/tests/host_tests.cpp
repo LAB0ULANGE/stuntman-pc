@@ -4,12 +4,14 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ps2host/disc.h"
@@ -804,6 +806,29 @@ void IopImageGivesModuleReleases() {
     ps2host::SetFileIoRelease("2800");
 }
 
+// The watchdog's stop (run.h): the budgets spent again and again until the run
+// has stopped - one write can be lost to a loop's own decrement - and given up
+// at the limit when it never does.
+void StopIsWrittenUntilTheRunStops() {
+    using std::chrono::milliseconds;
+    int spends = 0, waits = 0;
+    const bool stopped = ps2host::SpendUntilStopped(
+        [&] { ++spends; }, [&](milliseconds) { return ++waits == 3; }, milliseconds(1), milliseconds(10000));
+    Check(stopped && spends == 3, "the stop is written again until the run stops");
+    spends = 0;
+    const auto from = std::chrono::steady_clock::now();
+    const bool never = ps2host::SpendUntilStopped(
+        [&] { ++spends; },
+        [](milliseconds every) {
+            std::this_thread::sleep_for(every);
+            return false;
+        },
+        milliseconds(5), milliseconds(50));
+    const auto took = std::chrono::steady_clock::now() - from;
+    Check(!never && spends >= 2 && took >= milliseconds(50) && took < milliseconds(5000),
+          "a run that never stops is given up at the limit");
+}
+
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
 // listing the game's "open" reads sizes from, the answers it maps to errors.
 void MemoryCardKeepsSaves() {
@@ -1318,6 +1343,7 @@ int main() {
     VifRunsMicroprogramsOnAVu();
     MemoryCardKeepsSaves();
     IopImageGivesModuleReleases();
+    StopIsWrittenUntilTheRunStops();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();

@@ -732,6 +732,17 @@ void ForEachContext(void (*visit)(lifted::Context&)) {
     visit(S().interrupt_context);
 }
 
+bool SpendUntilStopped(const std::function<void()>& spend,
+                       const std::function<bool(std::chrono::milliseconds)>& stopped,
+                       std::chrono::milliseconds every, std::chrono::milliseconds limit) {
+    const auto deadline = std::chrono::steady_clock::now() + limit;
+    for (;;) {
+        spend();
+        if (stopped(every)) return true;
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+    }
+}
+
 namespace {
 
 /* The run's real time (RunThreads, or StartRealTime): the blanks' timer,

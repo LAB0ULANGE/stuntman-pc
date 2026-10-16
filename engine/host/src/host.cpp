@@ -501,13 +501,28 @@ public:
         if (!done_.wait_for(lock, std::chrono::seconds(seconds), [this] { return finished_; })) {
             fired = true;
             StopRequested() = true;
-            ForEachContext([](lifted::Context& each) {
-                reinterpret_cast<std::atomic<s64>*>(&each.budget)->store(-1);
-            });
+            // Spent again every 10 ms, not once: Tick's `--c.budget` is a plain
+            // read-modify-write (`sub qword ptr [budget],1`), and a loop with
+            // nothing else in it - Stuntman's wait on COP0 Count at 0x001A3208,
+            // two instructions once compiled - is inside one nearly all the
+            // time. A single -1 stored between its read and its write is
+            // overwritten with the old budget less one, and the loop never sees
+            // it. The budget stays a plain s64: an atomic one would cost every
+            // Tick a locked instruction.
             // A run that does not stop is stuck in host code (no guest loop
             // head comes): say where the guest was, rather than be killed
             // without a word.
-            if (!done_.wait_for(lock, std::chrono::seconds(20), [this] { return finished_; })) {
+            const bool stopped = SpendUntilStopped(
+                [] {
+                    ForEachContext([](lifted::Context& each) {
+                        reinterpret_cast<std::atomic<s64>*>(&each.budget)->store(-1);
+                    });
+                },
+                [&](std::chrono::milliseconds every) {
+                    return done_.wait_for(lock, every, [this] { return finished_; });
+                },
+                std::chrono::milliseconds(10), std::chrono::seconds(20));
+            if (!stopped) {
                 u32 calls[32];
                 const int n = GuestCallsNow(calls, 32);
                 std::fprintf(stderr, "\n=== host report ===\nstuck: the run did not stop 20 s after its time "

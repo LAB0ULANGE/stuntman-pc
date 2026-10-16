@@ -7,6 +7,7 @@
 #define PS2HOST_RUN_H
 
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <string>
 #include <functional>
@@ -95,6 +96,14 @@ void DeleteCoroutine(Coroutine* co);
 std::vector<u32> InterruptedCalls();
 /* Every guest register context: the threads' and the interrupt handlers'. */
 void ForEachContext(void (*visit)(lifted::Context&));
+/* From another thread, stop translated code at its next loop head: `spend`
+   (setting every budget to -1), then again every `every`, until `stopped`
+   (waiting up to `every` for the run to end) says it has, or `limit` has
+   passed. True when it stopped. Written again because one write can be lost:
+   see the Watchdog in host.cpp. */
+bool SpendUntilStopped(const std::function<void()>& spend,
+                       const std::function<bool(std::chrono::milliseconds)>& stopped,
+                       std::chrono::milliseconds every, std::chrono::milliseconds limit);
 /* Each thread's state, for the report. */
 std::string ThreadReport();
 /* The thread, semaphore and interrupt services; false for any other service. */
