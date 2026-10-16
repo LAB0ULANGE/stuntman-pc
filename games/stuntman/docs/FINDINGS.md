@@ -87,3 +87,34 @@ starts the function at `0x0025FDDC`, one instruction late: `port.py
 
 The host now sends that record and command for every asynchronous fileio
 request (`engine/host/src/fileio.cpp`, `SendCmdToEe` in `iop.cpp`).
+
+## The black screen: textures sent at VIF1's interrupt bit
+
+The first screen drew ~78 primitives a frame, all black: its sprites sample
+8-bit textures at GS 0x3540-0x3600 that were never uploaded (index 0 of an
+alpha-ramp palette, RGB 0). The uploads are built every frame by `0x001CFFB0`
+(via `0x001DB810` -> `0x001CFD48`, queued in a list at 0x0032xxxx with
+`0x001CE798` / `0x001CE820`) and sent by an INTC handler, not by a DMA chain:
+- `AddIntcHandler(5, 0x001CFAF8)`, cause 5 = VIF1's interrupt. The VIF1
+  display lists (double-buffered at 0x004E9000 / 0x00410000) carry 26
+  `0x93000000` - FLUSHA with the interrupt bit - each after an MSCAL/MSCNT,
+  in DMA tags' upper halves.
+- At each, VIF1 stalls; `0x001CFAF8` takes the next upload of the list at
+  `*(0x005C2264)` (+0x200 count, +0x204 index, +0x208 entries), clears GS
+  CSR.FINISH, sends it (`0x001CEB08`), waits for FINISH, and writes
+  VIF1_FBRST = 8 (STC): VIF1 goes on, the texture in GS memory before the
+  draws that use it.
+- VIF1_ERR is 2 (MII clear: the interrupt is on); FBRST = 1 (reset) once, in
+  XAVStr's initialisation.
+
+The host ignored bit 31 of VIFcodes; it now stalls VIF1 there (engine
+commits da84382, c6838bb). The report's "VIF1: N interrupt stalls" counts
+them: about 26 a frame. The first screen is the language select (English,
+Français, Italiano, Deutsch, Español), from frame ~200.
+
+Also found on the way: EE thread 2 (entry `0x0025D3E0`, created by
+`0x0025D4B8`) is libkernel's helper for the i-calls (WakeupThread,
+RotateThreadReadyQueue, SuspendThread from interrupts): asleep on its
+semaphore by design. `*0x0026F4F4` -> `0x01FE6FE8`, a 64-bit value
+(0x01139AB2 at frame 2006) the main loop `0x00119600` compares with 0x90 and
+0x8732B. The pad is opened (port 0 slot 0, area `0x005CBA40`).
