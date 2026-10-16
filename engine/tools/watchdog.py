@@ -39,8 +39,9 @@ def memory_gb(process: str) -> tuple:
         for row in csv.reader(io.StringIO(output)):
             if len(row) >= 5 and row[0].lower().startswith(process.lower()):
                 count += 1
-                total += float(row[4].replace("K", "").replace(",", "").replace(".", "")
-                               .strip() or 0) / (1024 * 1024)
+                # KB in every locale ("77,660 K", "77 660 Ko"): keep the digits only
+                total += float("".join(ch for ch in row[4] if ch.isdigit())
+                               or 0) / (1024 * 1024)
         return count, total
     output = subprocess.run(["ps", "-eo", "comm,rss"], capture_output=True, text=True).stdout
     rows = [line.split() for line in output.splitlines()[1:]]
