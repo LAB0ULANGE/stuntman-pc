@@ -161,6 +161,12 @@ void RaiseDmac(u32 channel);
    thread's next loop head, or between threads - never inside the store that
    started the transfer, since code goes on to set up for the interrupt. */
 void PostDmac(u32 channel);
+/* A device's INTC cause (VIF1's interrupt bit): raised as RaiseIntc does, at
+   the running thread's next loop head, as PostDmac's - never inside the store
+   that caused it, nor inside a handler. */
+void PostIntc(u32 cause);
+/* VIF1's stalls at a VIFcode's interrupt bit, for the report (devices.cpp). */
+u64 Vif1InterruptStalls();
 /* A channel a device moves at its own pace (the IPU's) has finished: its
    D_STAT bit, and its interrupt as PostDmac (devices.cpp). */
 void DmaChannelEnded(u32 channel);

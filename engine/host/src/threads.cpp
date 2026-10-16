@@ -131,6 +131,7 @@ struct Scheduler {
     bool in_interrupt = false;
     lifted::Context interrupt_context = NewContext();
     u32 pending_dmac = 0;                   // channels whose interrupt waits
+    u32 pending_intc = 0;                   // INTC causes a device posted (PostIntc)
     u32 dmac_missed = 0;                    // channels that ended while their interrupt was off
     bool realtime = false;                  // a vblank timer runs (unlimited budget)
     // --virtual-time: the scheduler keeps the clock. A thread runs a slice of
@@ -226,6 +227,9 @@ bool RunHandlers(const std::map<u32, Handler>& handlers, u32 cause) {
         s.in_interrupt = nested;
         ran = true;
     }
+    // What the handler posted (PostDmac, PostIntc) waits for no other event:
+    // the interrupted thread's next loop head.
+    if (ran && !s.in_interrupt && (s.pending_dmac || s.pending_intc)) RequestDelivery();
     return ran;
 }
 
@@ -307,11 +311,21 @@ bool DeliverFrame() {
 
 void DeliverPendingDmac() {
     Scheduler& s = S();
-    while (s.pending_dmac) {
-        u32 channel = 0;
-        while (!((s.pending_dmac >> channel) & 1)) ++channel;
-        s.pending_dmac &= s.pending_dmac - 1;
-        RaiseDmac(channel);
+    while (s.pending_dmac || s.pending_intc) {
+        if (s.pending_dmac) {
+            u32 channel = 0;
+            while (!((s.pending_dmac >> channel) & 1)) ++channel;
+            s.pending_dmac &= s.pending_dmac - 1;
+            RaiseDmac(channel);
+            continue;
+        }
+        // A device's INTC cause (PostIntc): one after another, never nested -
+        // a handler that posts the next (VIF1 resumed, and stalled again)
+        // has it run here once it has returned.
+        u32 cause = 0;
+        while (!((s.pending_intc >> cause) & 1)) ++cause;
+        s.pending_intc &= s.pending_intc - 1;
+        RaiseIntc(cause);
     }
 }
 
@@ -628,6 +642,11 @@ void ClearIntcStat(u32 bits) { g_intc_stat.fetch_and(~bits, std::memory_order_re
 
 void PostDmac(u32 channel) {
     S().pending_dmac |= 1u << channel;
+    RequestDelivery();
+}
+
+void PostIntc(u32 cause) {
+    S().pending_intc |= 1u << cause;
     RequestDelivery();
 }
 
