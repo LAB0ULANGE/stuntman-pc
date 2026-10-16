@@ -232,7 +232,8 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& request) {
  *   +0x50 u16 mode table (pad types: 4 digital, 7 DualShock), +0x64 2 (a
  *         controller with modes), +0x65 the mode ID, +0x68 modes, +0x69 the
  *         current mode, +0x6A actuators, +0x6B combinations of them (the
- *         first at +0x40: how many actuators, then which)
+ *         first at +0x40: how many actuators, then which), +0x66 2 and the
+ *         buttons with pressure at +0x79 (0x3FFFF: a DualShock 2)
  *   +0x70 state (6: stable), +0x71 request state (0: done, 2: busy),
  *   +0x72 1 (a controller is there)
  */
@@ -330,6 +331,14 @@ void PadmanFrame() {
         m.Write(f + 0x40, 2, 1);
         m.Write(f + 0x41, 0, 1);
         m.Write(f + 0x42, 1, 1);
+        // Its buttons' pressure can be read (scePadInfoPressMode, libpad 2.4:
+        // +0x66 at least 2, the mask of buttons with pressure at +0x79, all
+        // 18): a DualShock 2. Stuntman takes no other controller.
+        m.Write(f + 0x66, 2, 1);
+        m.Write(f + 0x79, 0x0003FFFFu & 0xFF, 1);
+        m.Write(f + 0x7A, (0x0003FFFFu >> 8) & 0xFF, 1);
+        m.Write(f + 0x7B, (0x0003FFFFu >> 16) & 0xFF, 1);
+        m.Write(f + 0x7C, 0, 1);
         m.Write(f + 0x72, 1, 1);
     }
 }

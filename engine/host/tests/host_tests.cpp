@@ -1098,6 +1098,8 @@ void PadmanSetActAlignIsDone() {
     Check(m.Read(f + 0x6A, 1) == 2 && m.Read(f + 0x6B, 1) == 1 && m.Read(f + 0x40, 1) == 2 &&
               m.Read(f + 0x41, 1) == 0 && m.Read(f + 0x42, 1) == 1,
           "the pad's frame: two actuators, one combination of both");
+    Check(m.Read(f + 0x66, 1) == 2 && (m.Read(f + 0x79, 4) & 0xFFFFFFFFu) == 0x0003FFFFu,
+          "the pad's frame: a DualShock 2, its 18 buttons' pressure readable");
     std::vector<u32> close(0x20, 0);
     close[0] = 0x0E;                                         // scePadPortClose, port 0 slot 0
     SendSifPacket(call, close);
