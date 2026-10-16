@@ -1,0 +1,22 @@
+# Never commit copyrighted material: disc images, BIOS dumps, extracted game
+# files, or anything derived from them that contains a game's code or assets.
+*.iso
+*.ISO
+extracted/
+asm/
+build/
+bios/
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

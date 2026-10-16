@@ -1,0 +1,23 @@
+STUNTMAN PC - dossier de travail
+================================
+
+engine\   = ps2-port-engine (danielgomesvieira2000), avec 2 instructions
+            PS2 ajoutees pour Stuntman (PROT3W et PPACW).
+
+Etapes (dans un terminal ouvert dans ce dossier, une fois Visual Studio,
+Python, Git et Claude Code installes) :
+
+  1. python engine\tools\port.py init stuntman --iso "C:\chemin\vers\Stuntman.iso" --title "Stuntman"
+  2. python engine\tools\isotool.py extract "C:\chemin\vers\Stuntman.iso" SLES_502.88 -o games\stuntman\extracted\
+  3. python engine\tools\analyze.py    --game games\stuntman
+  4. python engine\tools\signatures.py --game games\stuntman name
+  5. python engine\tools\derive.py     --game games\stuntman --emit --csv
+  6. python engine\tools\lift.py       --game games\stuntman --structure --emit --csv
+  7. python engine\tools\port.py       --game games\stuntman
+
+L'etape 7 compile et lance le port : il s'arretera et ecrira un RAPPORT
+disant ce qui manque. C'est normal - c'est le point de depart.
+Ou plus simple : lancer "claude" dans ce dossier et lui demander de suivre
+les skills du moteur (engine\.claude\skills).
+
+Ne jamais partager l'ISO, ni les dossiers extracted\, build\ et src\.

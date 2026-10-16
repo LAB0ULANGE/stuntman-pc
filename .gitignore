@@ -1,0 +1,32 @@
+# Never commit copyrighted material: disc images, BIOS dumps, extracted game
+# files, or anything derived from them that contains the game's code or assets.
+*.iso
+*.ISO
+*.bin
+*.BIN
+*.cue
+*.img
+extracted/
+asm/
+build/
+bios/
+*.zip
+
+# A game's own code in C++ - lifted, derived and reconstructed - is the game's,
+# regenerated from the player's disc by the tools: never committed.
+games/*/src/
+games/*/include/*/
+!games/*/include/ps2/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

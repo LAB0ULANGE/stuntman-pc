@@ -1,0 +1,17 @@
+#version 450
+// Words of GS local memory patched in place, each under a mask: a transfer
+// that wrote part of a block the GPU holds newer, its bytes put over the
+// GPU's without the block brought back to the CPU first (the CPU would wait
+// for every draw before it). Eight words a dispatch, in the push constants:
+// (word, value, mask) - a mask of 0 is no word.
+
+layout(local_size_x = 8) in;
+
+layout(std430, binding = 0) buffer Memory { uint mem[]; };     // 4 MB
+
+layout(push_constant) uniform Patch { uvec4 words[8]; } patch_words;
+
+void main() {
+    const uvec4 w = patch_words.words[gl_LocalInvocationID.x];
+    if (w.z != 0u) mem[w.x] = (mem[w.x] & ~w.z) | (w.y & w.z);
+}

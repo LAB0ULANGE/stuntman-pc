@@ -1,0 +1,7 @@
+{
+  "name": "@NAME@",
+  "title": "@TITLE@",
+  "version": "0.0.1-dev",
+  "iso": "@ISO@",
+  "executable": "@EXECUTABLE@"
+}

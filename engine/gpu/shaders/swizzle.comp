@@ -1,0 +1,113 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// GS local memory on the GPU: pixels moved between an image's rows (linear,
+// one 32-bit value a pixel) and the GS's swizzled layout (GS User's Manual,
+// chapter 8; the tables are engine/host/src/gs_memory.cpp's). One invocation
+// a pixel. Colour is RGBA8 as the targets hold it; depth is the depth image's
+// float, Z / 2^32.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, binding = 0) buffer Memory { uint mem[]; };     // 4 MB
+layout(std430, binding = 1) buffer Linear { uint lin[]; };
+#ifdef IMAGE
+// Compiled a second time with IMAGE: a colour target's pixels straight from
+// and to the image (no copy of it through Linear - at 3x those copies were
+// most of the GPU's time).
+layout(set = 1, binding = 0, rgba8) uniform image2D target;
+#endif
+#ifdef DEPTH_IMAGE
+// ...and with DEPTH_IMAGE: a depth buffer's Z sampled straight from it, to
+// memory (depth_load.frag brings it back).
+layout(set = 1, binding = 0) uniform sampler2D depth_image;
+#endif
+
+layout(push_constant) uniform Params {
+    uint bp;            // base, in 256-byte blocks
+    uint bw;            // width, in 64-pixel units
+    uint psm;
+    uint cols, rows;    // the rectangle moved, from (0, 0)
+    uint stride;        // the linear rows' length, in pixels
+    uint to_memory;     // 1: linear -> memory; 0: memory -> linear
+    uint depth;         // the linear side is depth (float)
+    uint row0;          // the image's row that linear row 0 holds
+    uint scale;         // the image's pixels to a GS pixel, each way (the internal resolution)
+    uint keep_colour;   // memory -> image, 32-bit: the square's colour kept where memory differs in alpha alone
+} p;
+
+#include "gs_address.glsl"
+
+uint To16(uint c) {
+    return ((c >> 3) & 31u) | (((c >> 11) & 31u) << 5) | (((c >> 19) & 31u) << 10) | ((c >> 31) << 15);
+}
+
+uint From16(uint c) {
+    return ((c & 31u) << 3) | (((c >> 5) & 31u) << 11) | (((c >> 10) & 31u) << 19) |
+           ((c & 0x8000u) != 0u ? 0x80000000u : 0u);
+}
+
+void main() {
+    const uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
+    if (x >= p.cols || y >= p.rows) return;
+    const uint a = Address(x, y + p.row0);
+    const uint word = a >> 2;
+    // The image's pixels for GS pixel (x, y): a square of scale x scale,
+    // all of it filled from memory; the one at its middle (k/2, k/2) taken to
+    // memory - the one a primitive covers when the GS pixel's centre is
+    // covered (a sprite's edge at a half pixel - Burnout 3's channel shuffle
+    // - left the square's first one out, and its column stale).
+    const uint k = max(p.scale, 1u);
+    const uint li = (y * k) * p.stride + x * k;
+    const uint mid = li + (k / 2u) * p.stride + k / 2u;
+#if defined(IMAGE) || defined(DEPTH_IMAGE)
+    const ivec2 at = ivec2(x * k, (y + p.row0) * k);
+#endif
+    const bool z24 = p.psm == PSMCT24 || p.psm == PSMZ24;
+    if (p.to_memory == 1u) {
+#ifdef IMAGE
+        uint v = packUnorm4x8(imageLoad(target, at + ivec2(k / 2u)));
+#elif defined(DEPTH_IMAGE)
+        uint v = floatBitsToUint(texelFetch(depth_image, at + ivec2(k / 2u), 0).r);
+#else
+        uint v = lin[mid];
+#endif
+        if (p.depth == 1u) v = uint(clamp(uintBitsToFloat(v) * 4294967296.0, 0.0, 4294967040.0));
+        if (Is16()) {
+            const uint shift = (a & 2u) * 8u;
+            const uint h = p.depth == 1u ? (v & 0xFFFFu) : To16(v);
+            // Two pixels share the word: each changes only its own half.
+            atomicAnd(mem[word], ~(0xFFFFu << shift));
+            atomicOr(mem[word], h << shift);
+        } else if (z24) {
+            mem[word] = (mem[word] & 0xFF000000u) | (v & 0xFFFFFFu);    // the top byte is not the pixel's
+        } else {
+            mem[word] = v;
+        }
+    } else {
+        const uint w = mem[word];
+        uint v;
+        if (Is16()) {
+            const uint h = (w >> ((a & 2u) * 8u)) & 0xFFFFu;
+            v = p.depth == 1u ? h : From16(h);
+        } else {
+            v = z24 ? (w & 0xFFFFFFu) : w;
+        }
+        const uint value = p.depth == 1u ? floatBitsToUint(float(v) * (1.0 / 4294967296.0)) : v;
+#ifdef IMAGE
+        // Memory differing from the square's middle (what went to memory) in
+        // alpha alone: each pixel keeps its colour, takes memory's alpha.
+        const bool keep = p.keep_colour == 1u && k > 1u && !Is16() && !z24 &&
+                          ((packUnorm4x8(imageLoad(target, at + ivec2(k / 2u))) ^ value) & 0xFFFFFFu) == 0u;
+        for (uint dy = 0u; dy < k; ++dy)
+            for (uint dx = 0u; dx < k; ++dx) {
+                const ivec2 xy = at + ivec2(dx, dy);
+                vec4 c = unpackUnorm4x8(value);
+                if (keep) c = vec4(imageLoad(target, xy).rgb, c.a);
+                imageStore(target, xy, c);
+            }
+#else
+        for (uint dy = 0u; dy < k; ++dy)
+            for (uint dx = 0u; dx < k; ++dx) lin[li + dy * p.stride + dx] = value;
+#endif
+    }
+}

@@ -1,0 +1,558 @@
+{
+ "format": 2,
+ "functions": {
+  "101:552e25b4531a369e": {
+   "lgKbMInit": [
+    "SLUS_210.50"
+   ]
+  },
+  "107:5696ad56ed543bef": {
+   "LookupVariantC": [
+    "SLUS_210.50"
+   ]
+  },
+  "113:92e99d5c60df5bb2": {
+   "lgDevReadMulti": [
+    "SLUS_210.50"
+   ]
+  },
+  "115:3059c53fbeb1e470": {
+   "lgAudEnumerate": [
+    "SLUS_210.50"
+   ]
+  },
+  "117:29e73de45a2a6385": {
+   "_LobbyStatbookRowCb": [
+    "SLUS_210.50"
+   ]
+  },
+  "126:6c335b6c6ad21ce2": {
+   "LookupVariantB": [
+    "SLUS_210.50"
+   ]
+  },
+  "133:cb5579b4086ae63b": {
+   "LookupByPath": [
+    "SLUS_210.50"
+   ]
+  },
+  "14:6e6e2693b879afa0": {
+   "FindFirstSet": [
+    "SLUS_210.50"
+   ]
+  },
+  "188:5c0fbd303df2f930": {
+   "_LobbyStatbookViewCb": [
+    "SLUS_210.50"
+   ]
+  },
+  "197:517cbfc5a1d5b983": {
+   "sceGsSyncPath": [
+    "SLUS_210.50"
+   ]
+  },
+  "21:33515352acf0c103": {
+   "lgDevEnumHint": [
+    "SLUS_210.50"
+   ]
+  },
+  "243:916906c38fb7bc28": {
+   "_LobbyRankSnapCb": [
+    "SLUS_210.50"
+   ]
+  },
+  "25:474a0d8a2b372883": {
+   "_LobbyApiCancelOneShotCB": [
+    "SLUS_210.50"
+   ]
+  },
+  "27:66e598159c7524c7": {
+   "sceDbcSetWorkAddr": [
+    "SLUS_210.50"
+   ]
+  },
+  "28:0c5bc0755f08aa51": {
+   "lgAudEnumHint": [
+    "SLUS_210.50"
+   ]
+  },
+  "28:b0d99a2ac733a66c": {
+   "HashName": [
+    "SLUS_210.50"
+   ]
+  },
+  "28:f6731adcc2dfcb10": {
+   "sceDbcInitSocket": [
+    "SLUS_210.50"
+   ],
+   "sceDbcResetSocket": [
+    "SLUS_210.50"
+   ]
+  },
+  "301:cec25417a8086180": {
+   "lgAudInit": [
+    "SLUS_210.50"
+   ]
+  },
+  "319:c1e8097aceb79d4c": {
+   "sceGsExecStoreImage": [
+    "SLUS_210.50"
+   ]
+  },
+  "32:b291fae6748b552e": {
+   "_LobbyApiConfigCallback": [
+    "SLUS_210.50"
+   ]
+  },
+  "34:97896d4560a8335e": {
+   "sceDbcDeleteSocket": [
+    "SLUS_210.50"
+   ]
+  },
+  "36:4656d0de8e7492fe": {
+   "lgDevAStartForceEffect": [
+    "SLUS_210.50"
+   ]
+  },
+  "36:6c61339dcfc71b9d": {
+   "lgDevAStopForceEffect": [
+    "SLUS_210.50"
+   ]
+  },
+  "41:66e0df0dc8c3dd03": {
+   "_LobbyApiGlobalCallback": [
+    "SLUS_210.50"
+   ]
+  },
+  "47:0bac469f04ec18aa": {
+   "lgDevOpen": [
+    "SLUS_210.50"
+   ]
+  },
+  "48:e40bc5c9c3c0d100": {
+   "_LobbyStatbookCreate": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:10f3fda7abf3e768": {
+   "SifSetReg": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:1c6b807e47732d3a": {
+   "iSifSetDChain": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:20d7c21c16e7fc53": {
+   "ChangeThreadPriority": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:2128efeacbdbf591": {
+   "RFU083": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:2641980b293b45b1": {
+   "MachineType_or_rfu": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:2941b20999f5a30e": {
+   "ExecPS2": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:4328807a69c047c9": {
+   "GetMemorySize_or_rfu": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:4520435c95317d29": {
+   "SleepThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:487a9278ee909817": {
+   "AddDmacHandler": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:4b80008f800046d1": {
+   "RFU127": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:4ff18c6ac41fc80c": {
+   "GetThreadId": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:5a2a6a344c5df6c2": {
+   "RFU111": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:622eac17db281566": {
+   "ReferThreadStatus": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:64dc7af9db4502f3": {
+   "SuspendThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:64dd09eda5be6ef7": {
+   "AddIntcHandler": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:65ed5b93600e7a9f": {
+   "Deci2Call_alt": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:69c56eae5e01cc87": {
+   "SetSyscall": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:69dd4805ff44d743": {
+   "SifSetDChain": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:7065cd8b14490ddd": {
+   "EndOfHeap": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:710fa98fdb86d83d": {
+   "WakeupThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:7292cfe983153506": {
+   "GsGetIMR": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:74eb0fa1efdfb03b": {
+   "_DisableIntc": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:779fd9de7cb149f3": {
+   "Deci2Call": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:78cdf1b38deeea08": {
+   "RFU107": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:827dd7e623e62647": {
+   "RemoveIntcHandler": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:869d851891fd9214": {
+   "FlushCache": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:8b1d1a50852e421d": {
+   "GetOsdConfigParam": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:8c3cd2b391b772f1": {
+   "PollSema": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:8df7bdfc50c91872": {
+   "CreateSema": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:8f82a0df02e00a0f": {
+   "ResumeThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:9188a7ea160e3b0d": {
+   "RFU080": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:9310dfc8a3786e54": {
+   "SetVSyncFlag": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:95bd793557975110": {
+   "GsPutIMR": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:9670279ac77aa4ad": {
+   "SifDmaStat": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:97f43c210a6add26": {
+   "SetOsdConfigParam": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:9e615ec53d168f96": {
+   "WaitSema": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:a8fc288baca2dd96": {
+   "DeleteSema": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:aa5c3590140ca630": {
+   "SetVTLBRefillHandler": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:adba01dd612efd3c": {
+   "SifGetReg": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:af839c1b886993a9": {
+   "_EnableIntc": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:b27199e0cf28f57f": {
+   "ExitDeleteThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:b27c5be62bb6cd49": {
+   "SifSetDma": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:b87812db67e32d46": {
+   "_DisableDmac": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:bf718a8c45194019": {
+   "SignalSema": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:c805f4cb58dd73bf": {
+   "StartThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:c8d75f3c68d69954": {
+   "TerminateThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:d21c96920b65ad61": {
+   "RotateThreadReadyQueue": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:d344e77c5e08e273": {
+   "RemoveDmacHandler": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:d460e613d1dbbe9b": {
+   "DeleteThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:d627bbc28b6198e7": {
+   "CreateThread": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:e1b37566f6d23c92": {
+   "_EnableDmac": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:e3869021c192d9a0": {
+   "iSifSetDma": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:ed93e28c6b23ab71": {
+   "RFU082": [
+    "SLUS_210.50"
+   ]
+  },
+  "4:ef280982afb3b3fe": {
+   "SetVCommonHandler": [
+    "SLUS_210.50"
+   ]
+  },
+  "52:00c71051d4a35128": {
+   "lgDevARead": [
+    "SLUS_210.50"
+   ]
+  },
+  "52:201abd3a19e4e1b1": {
+   "lgDevGetDeviceProperty": [
+    "SLUS_210.50"
+   ]
+  },
+  "54:5bf8f68e62665711": {
+   "sceDbcCreateSocket": [
+    "SLUS_210.50"
+   ]
+  },
+  "57:39aaf9bcd884935e": {
+   "lgDevEnumerate": [
+    "SLUS_210.50"
+   ]
+  },
+  "58:ffc4fec4989ca6cf": {
+   "sceGsPutDrawEnv": [
+    "SLUS_210.50"
+   ]
+  },
+  "59:22705c20e72cc002": {
+   "sceDbcReceiveData": [
+    "SLUS_210.50"
+   ]
+  },
+  "59:d3e8c27bb53a163a": {
+   "lgAudPrepareForReboot": [
+    "SLUS_210.50"
+   ]
+  },
+  "5:2441ae8c0e3013cb": {
+   "AdvanceBufferCursor": [
+    "SLUS_210.50"
+   ]
+  },
+  "62:5deaf0f3587e4cc9": {
+   "lgDevRead": [
+    "SLUS_210.50"
+   ]
+  },
+  "68:0e1b1954319e8cce": {
+   "lgDevStopForceEffectMulti": [
+    "SLUS_210.50"
+   ]
+  },
+  "68:911353aa723936d9": {
+   "lgDevStartForceEffectMulti": [
+    "SLUS_210.50"
+   ]
+  },
+  "69:8456ff6e79c63f8e": {
+   "StringCopy": [
+    "SLUS_210.50"
+   ]
+  },
+  "6:6adfc71f60532163": {
+   "EnableIntr": [
+    "SLUS_210.50"
+   ]
+  },
+  "75:21a2559f6feba9dd": {
+   "StringAppend": [
+    "SLUS_210.50"
+   ]
+  },
+  "75:2f8f032142079a9c": {
+   "sceDbcSendData": [
+    "SLUS_210.50"
+   ]
+  },
+  "78:7a7017da2013a230": {
+   "StringLength": [
+    "SLUS_210.50"
+   ]
+  },
+  "81:1838ebd62451b95d": {
+   "lgDevUpdateForceEffect": [
+    "SLUS_210.50"
+   ]
+  },
+  "82:3a4821cbae80399b": {
+   "sceDbcSRData": [
+    "SLUS_210.50"
+   ]
+  },
+  "82:714e65199859a560": {
+   "sceDbcGetDepNumber": [
+    "SLUS_210.50"
+   ]
+  },
+  "83:7fdb4946a6703a95": {
+   "lgDevAUpdateForceEffect": [
+    "SLUS_210.50"
+   ]
+  },
+  "87:43dc05dfcbca8549": {
+   "sceDbcSendData2": [
+    "SLUS_210.50"
+   ]
+  },
+  "88:f60633c544690b58": {
+   "lgDevDownloadForceEffect": [
+    "SLUS_210.50"
+   ]
+  },
+  "89:9d24198695a86334": {
+   "lgAudOpen": [
+    "SLUS_210.50"
+   ]
+  },
+  "92:01177041e9df2861": {
+   "lgAudWriteVag": [
+    "SLUS_210.50"
+   ]
+  },
+  "92:8d9ade4dfcea04af": {
+   "lgAudRead": [
+    "SLUS_210.50"
+   ]
+  },
+  "92:d00e32f4ce7c27d0": {
+   "lgAudWrite": [
+    "SLUS_210.50"
+   ]
+  },
+  "92:fae2bd273da43a6a": {
+   "lgDevAReadMulti": [
+    "SLUS_210.50"
+   ]
+  },
+  "93:d4c9a3d6dfad39ea": {
+   "lgAudARead": [
+    "SLUS_210.50"
+   ]
+  },
+  "97:d44a8a2cb3b9bc44": {
+   "lgAudAWrite": [
+    "SLUS_210.50"
+   ]
+  },
+  "97:e5e39fd5f1c14a6a": {
+   "lgAudAWriteVag": [
+    "SLUS_210.50"
+   ]
+  }
+ }
+}
