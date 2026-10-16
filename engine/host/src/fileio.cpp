@@ -18,6 +18,15 @@
  *   procedure 4  lseek  descriptor 0x0C, offset 0x10, whence 0x14       -> position
  *
  * Any other procedure is noted and fails (-1); they are added as games need them.
+ *
+ * Procedure 0xFF is the library's initialisation, answered directly (no result
+ * word, no semaphore): the module's release, 4 characters, as loadfile answers
+ * its own. Stuntman's library (0x002602E8) keeps it and refuses every open
+ * until it is the release it was built for ("2430", its IOPRP243.IMG's
+ * "fileio  2430" tag) - with zeros it retried its first open for ever. Before
+ * any reboot the release is the ROM-booted IOP's, taken as loadfile's ("2800").
+ * TO RECHECK: this answer was eight zero bytes until Stuntman; run
+ * engine/tools/regress_all.py on burnout3 once it is at hand.
  */
 
 #include <algorithm>
@@ -36,6 +45,8 @@ namespace ps2host {
 namespace {
 
 constexpr s32 kNoSuchFile = -2, kBadDescriptor = -9;
+
+char g_release[4] = {'2', '8', '0', '0'};   // until a reboot image says otherwise
 
 struct OpenFile {
     Disc::File file;
@@ -107,7 +118,7 @@ s32 Seek(const std::vector<u8>& data) {
 }
 
 std::vector<u8> FileIo(u32 procedure, const std::vector<u8>& data) {
-    if (procedure == 0xFF) return std::vector<u8>(8, 0);   // the service's initialisation
+    if (procedure == 0xFF) return FileIoVersionAnswer();   // the service's initialisation
     s32 result;
     switch (procedure) {
         case 0: result = Open(data); break;
@@ -128,6 +139,14 @@ std::vector<u8> FileIo(u32 procedure, const std::vector<u8>& data) {
 }
 
 }  // namespace
+
+void SetFileIoRelease(const char release[4]) { std::memcpy(g_release, release, 4); }
+
+std::vector<u8> FileIoVersionAnswer() {
+    std::vector<u8> answer(8, 0);
+    std::memcpy(answer.data(), g_release, 4);
+    return answer;
+}
 
 void InstallFileIo() { RegisterRpcServer(0x80000001u, FileIo); }
 

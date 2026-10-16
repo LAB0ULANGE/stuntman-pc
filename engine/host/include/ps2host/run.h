@@ -123,8 +123,17 @@ void InstallIopServers();
 void InstallFileIo();
 void InstallLoadFile();
 /* The IOP rebooted with a replacement image from the disc (IOPRPnnn.IMG):
-   the releases of its modules - loadfile's answers its version check. */
+   the releases of its modules - loadfile's and fileio's answer their version
+   checks. */
 void UseIopImage(const std::string& path);
+/* A module's release in an IOP image: its library tag, eight characters of
+   name (space-padded) then four digits - "loadfile2430", "fileio  2430".
+   False when the image has no such tag. */
+bool ModuleRelease(const std::vector<u8>& image, const std::string& name, char release[4]);
+/* The release file I/O's version check (procedure 0xFF) answers, and its answer:
+   the four characters, then four zero bytes. */
+void SetFileIoRelease(const char release[4]);
+std::vector<u8> FileIoVersionAnswer();
 void InstallDbc();
 void InstallIopHeap();
 /* libmc's memory card server (mcserv.cpp) over --memcard's directory. */

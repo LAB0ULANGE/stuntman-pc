@@ -19,6 +19,7 @@
  * Any other procedure is noted and fails.
  */
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -88,9 +89,24 @@ std::vector<u8> LoadFile(u32 procedure, const std::vector<u8>& data) {
 
 void InstallLoadFile() { RegisterRpcServer(0x80000006u, LoadFile); }
 
+bool ModuleRelease(const std::vector<u8>& image, const std::string& name, char release[4]) {
+    char tag[8];
+    std::memset(tag, ' ', 8);
+    std::memcpy(tag, name.data(), std::min<std::size_t>(name.size(), 8));
+    for (std::size_t i = 0; i + 12 <= image.size(); ++i) {
+        if (std::memcmp(&image[i], tag, 8) != 0) continue;
+        bool digits = true;
+        for (int k = 8; k < 12; ++k) digits = digits && image[i + k] >= '0' && image[i + k] <= '9';
+        if (!digits) continue;
+        std::memcpy(release, &image[i + 8], 4);
+        return true;
+    }
+    return false;
+}
+
 // An IOP replacement image (IOPRPnnn.IMG) holds its modules, each with its
 // library tag - eight characters of name, four of release: "loadfile2340".
-// Its loadfile's release is what loadfile answers from then on.
+// Its loadfile's and its fileio's releases are what they answer from then on.
 void UseIopImage(const std::string& path) {
     std::string disc_path = path;
     const std::size_t colon = disc_path.find(':');
@@ -100,13 +116,15 @@ void UseIopImage(const std::string& path) {
         Note("iop image " + path, "IOP: reboot image " + path + " is not on the disc");
         return;
     }
-    static const char kTag[] = "loadfile";
-    for (std::size_t i = 0; i + 12 <= image.size(); ++i) {
-        if (std::memcmp(&image[i], kTag, 8) != 0) continue;
-        bool digits = true;
-        for (int k = 8; k < 12; ++k) digits = digits && image[i + k] >= '0' && image[i + k] <= '9';
-        if (!digits) continue;
-        std::memcpy(g_version, &image[i + 8], 4);
+    char fileio[4];
+    if (ModuleRelease(image, "fileio", fileio)) {
+        SetFileIoRelease(fileio);
+        Note("iop image fileio " + path, "IOP: rebooted with " + path + ": fileio " +
+                                             std::string(fileio, 4));
+    } else {
+        Note("iop image fileio " + path, "IOP: reboot image " + path + " has no fileio tag");
+    }
+    if (ModuleRelease(image, "loadfile", g_version)) {
         Note("iop image " + path, "IOP: rebooted with " + path + ": loadfile " +
                                       std::string(g_version, 4));
         return;

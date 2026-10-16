@@ -22,6 +22,7 @@
 #include "ps2host/memory.h"
 #include "ps2host/vif.h"
 #include "ps2host/path3.h"
+#include "ps2host/run.h"
 #include "ps2host/texture_pack.h"
 #include "ps2host/vu.h"
 #include "ps2host/vu_core.h"
@@ -782,6 +783,27 @@ void VuLanesAreTheModel() {
     Check(wrong == 0, what);
 }
 
+// An IOP image's library tags (run.h): each module's release, found by its
+// space-padded name; file I/O's version check answers its module's release
+// (Stuntman's library refuses every open otherwise).
+void IopImageGivesModuleReleases() {
+    const std::string text = std::string("xx fileio  ab12 ioman   2430 ") + "fileio  2430" +
+                             std::string(3, '\0') + "loadfile2430";
+    const std::vector<u8> image(text.begin(), text.end());
+    char release[4] = {};
+    Check(ps2host::ModuleRelease(image, "fileio", release) && std::memcmp(release, "2430", 4) == 0,
+          "fileio's release, past a tag without digits");
+    Check(ps2host::ModuleRelease(image, "loadfile", release) && std::memcmp(release, "2430", 4) == 0,
+          "loadfile's release");
+    Check(!ps2host::ModuleRelease(image, "mcman", release), "a module the image does not hold");
+    ps2host::SetFileIoRelease("2430");
+    const std::vector<u8> answer = ps2host::FileIoVersionAnswer();
+    const u8 expected[8] = {'2', '4', '3', '0', 0, 0, 0, 0};
+    Check(answer.size() == 8 && std::memcmp(answer.data(), expected, 8) == 0,
+          "file I/O's version check answers the release, then four zeros");
+    ps2host::SetFileIoRelease("2800");
+}
+
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
 // listing the game's "open" reads sizes from, the answers it maps to errors.
 void MemoryCardKeepsSaves() {
@@ -1295,6 +1317,7 @@ int main() {
 #endif
     VifRunsMicroprogramsOnAVu();
     MemoryCardKeepsSaves();
+    IopImageGivesModuleReleases();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();
