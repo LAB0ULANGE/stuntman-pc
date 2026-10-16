@@ -26,12 +26,21 @@ namespace ps2host {
 
 struct DmaChannelState {
     std::uint32_t chcr, madr, qwc, tadr, asr0, asr1;
+    /* A chain stalled in the data of its last tag (an end, a refe, a ret with
+       nothing to return to, an IRQ with TIE): once QWC is sent it has ended. */
+    bool end_pending = false;
 };
 
 struct DmaOutcome {
     std::uint64_t quadwords = 0;    /* data quadwords sent, tags excluded */
     std::uint32_t tags = 0;
     bool ended = false;             /* reached an end tag (or IRQ with TIE, or normal mode) */
+    /* The peripheral stalled (SendDmaBlocksUntil): the registers say where the
+       transfer goes on from, and the words of the quadword it was in, past
+       the stall, are in `leftover` - read, but not taken yet. */
+    bool stalled = false;
+    std::uint32_t leftover[3] = {};
+    std::uint32_t leftover_count = 0;
 };
 
 /* Sends the channel's data to `word`, one 32-bit word at a time, reading guest
@@ -51,6 +60,18 @@ DmaOutcome SendDma(DmaChannelState& channel, const std::function<void(std::uint3
 using DmaBlockSink = std::function<void(const std::uint32_t* words, std::uint32_t count, std::uint32_t from)>;
 DmaOutcome SendDmaBlocks(DmaChannelState& channel, const DmaBlockSink& words,
                          std::uint32_t max_tags = 1u << 16);
+
+/* The same, to a peripheral that can stall (VIF1 at a VIFcode's interrupt
+   bit): it takes `words` of each run and says whether it stalls after them.
+   A stall ends the call with the registers where the transfer goes on from
+   (MADR/QWC owed, TADR, end_pending); called again, it goes on from there. */
+struct DmaTaken {
+    std::uint32_t words;
+    bool stall;
+};
+using DmaStallingSink = std::function<DmaTaken(const std::uint32_t* words, std::uint32_t count, std::uint32_t from)>;
+DmaOutcome SendDmaBlocksUntil(DmaChannelState& channel, const DmaStallingSink& words,
+                              std::uint32_t max_tags = 1u << 16);
 
 }  // namespace ps2host
 

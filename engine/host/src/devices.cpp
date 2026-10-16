@@ -34,6 +34,7 @@
 #include <mutex>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ps2host/dma.h"
 #include "ps2host/timeline.h"
@@ -83,6 +84,22 @@ void SetDStat(u32 value) {
     d_stat = value;
     *reinterpret_cast<u32*>(GuestMemory().Translate(kDStat, 4)) = value;
 }
+// VIF1's interrupt bit (EE User's Manual 6.3.4): a VIFcode with bit 31 set
+// stalls VIF1 once it is done, its data included - VIF1_STAT's VIS and INT
+// set, INTC cause 5 raised - unless VIF1_ERR.MII masks it; the EE's handler
+// does what the stream waited for (Stuntman: a texture's upload on PATH3) and
+// writes FBRST.STC, and the stream goes on. The DMA transfer feeding it stops
+// there too (dma.h, SendDmaBlocksUntil) and goes on from there. Nothing of it
+// happens unless a VIFcode in the stream carries the bit.
+constexpr u32 kVif1Stat = 0x10003C00u, kVif1Fbrst = 0x10003C10u, kVif1Err = 0x10003C20u;
+constexpr u32 kVifStatVis = 1u << 10, kVifStatInt = 1u << 11;
+constexpr u32 kIntcVif1 = 5;
+VifInterruptScanner g_vif1_scan;            // follows every word VIF1 takes
+bool g_vif1_stalled = false;
+std::vector<u32> g_vif1_leftover;           // read past the stall, not taken yet
+std::atomic<u64> g_vif1_stalls{0};
+bool g_vif1_end_pending = false;            // the stalled chain ends with its owed data
+
 constexpr u32 kGsCsr = 0x12001000u;
 constexpr u32 kGifStat = 0x10003020u;
 constexpr u32 kGifStatM3P = 1u << 1;
@@ -270,14 +287,65 @@ std::string Walk(const Channel& ch, u32 chcr, bool describe) {
             copy->words.insert(copy->words.end(), words, words + count);
             copy->runs.emplace_back(count, from);
         };
+    // VIF1 stalls after a VIFcode with the interrupt bit (g_vif1_scan): its
+    // words up to there go, and the transfer stops.
+    const bool vif1_channel = ch.base == 0x10009000u;
+    const bool interrupts = vif1_channel && !(*Register(kVif1Err) & 1);     // VIF1_ERR.MII
+    DmaStallingSink stalling = [&sink, vif1_channel, interrupts](const u32* words, u32 count, u32 from) {
+        if (!vif1_channel) {
+            sink(words, count, from);
+            return DmaTaken{count, false};
+        }
+        u32 taken = 0;
+        bool stall = false;
+        while (taken < count) {
+            const VifInterruptScanner::Stop stop = g_vif1_scan.Scan(words + taken, count - taken);
+            taken += stop.words;
+            if (!stop.stall) break;
+            if (interrupts) {
+                stall = true;
+                break;
+            }
+        }
+        if (taken) sink(words, taken, from);
+        return DmaTaken{taken, stall};
+    };
+    if (vif1_channel) state.end_pending = g_vif1_end_pending;
     char text[160] = "";
     try {
         Timed timed(Section::Dma);      // (VU1 and the GS, which it drives, timed apart)
-        const DmaOutcome outcome = SendDmaBlocks(state, sink);
+        DmaOutcome outcome;
+        // Resumed: first what was read past the stall.
+        if (vif1_channel && !g_vif1_leftover.empty()) {
+            std::vector<u32> before;
+            before.swap(g_vif1_leftover);
+            const DmaTaken taken = stalling(before.data(), u32(before.size()), state.madr);
+            if (taken.stall) {
+                outcome.stalled = true;
+                g_vif1_leftover.assign(before.begin() + taken.words, before.end());
+            }
+        }
+        if (!outcome.stalled) {
+            outcome = SendDmaBlocksUntil(state, stalling);
+            if (outcome.stalled && vif1_channel)
+                g_vif1_leftover.assign(outcome.leftover, outcome.leftover + outcome.leftover_count);
+        }
+        if (vif1_channel) {
+            g_vif1_end_pending = state.end_pending;
+            if (outcome.stalled) {
+                g_vif1_stalled = true;
+                ++g_vif1_stalls;
+                *Register(kVif1Stat) |= kVifStatVis | kVifStatInt;
+                Note("vif1 interrupt", "VIF1: a VIFcode's interrupt bit stalls the stream (INTC 5, "
+                                       "until FBRST.STC)");
+                PostIntc(kIntcVif1);
+            }
+        }
         if (describe)
             std::snprintf(text, sizeof text, "%llu quadwords, %u tags%s",
                       static_cast<unsigned long long>(outcome.quadwords), outcome.tags,
-                      outcome.ended ? "" : ", stopped: the chain does not end");
+                      outcome.stalled ? ", stalled at a VIFcode's interrupt bit"
+                      : outcome.ended ? "" : ", stopped: the chain does not end");
         const bool gif = ch.base == 0x1000A000u, vif1 = ch.base == 0x10009000u;
         const u64 quadwords = outcome.quadwords;
         auto fifo = [gif, quadwords] {
@@ -648,38 +716,63 @@ void Vif1Guesses(u64* guesses, u64* wrong) {
 
 void SetCheckGuesses(bool on) { g_check_guesses = on; }
 
+u64 Vif1InterruptStalls() { return g_vif1_stalls.load(); }
+
 void DmaChannelEnded(u32 channel) {
     SetDStat(d_stat | (1u << channel));
     PostDmac(channel);
+}
+
+// A channel's STR set (or VIF1's stalled transfer going on, FBRST.STC): its
+// transfer walked, and - unless VIF1 stalled in it - ended.
+void StartTransfer(const Channel& ch, u32 value) {
+    Memory& memory = GuestMemory();
+    const u32 chcr = ch.base, madr = ch.base + kMadr, qwc = ch.base + kQwc;
+    // The text only when it is logged: a DMA start is thousands a second.
+    const std::string key = std::string("dma ") + ch.name;
+    const bool traced = gs::TheGs().trace && (ch.base == 0x10009000u || ch.base == 0x1000A000u);
+    const bool describe = traced || Noting(key);
+    char text[256] = "";
+    if (describe)
+        std::snprintf(text, sizeof text,
+                      "DMA %s started: CHCR=0x%08X MADR=0x%08X QWC=%u TADR=0x%08X (completed at once)",
+                      ch.name, unsigned(value), unsigned(memory.Read(madr, 4)),
+                      unsigned(memory.Read(qwc, 4)), unsigned(memory.Read(ch.base + kTadr, 4)));
+    if (traced) std::fprintf(gs::TheGs().trace_out, "[dma] %s\n", text);
+    if (ch.base == 0x10009000u) ++g_vif1_transfers;
+    const std::string walked = ch.walked ? Walk(ch, value, describe) : std::string();
+    if (describe) Note(key, ch.walked ? std::string(text) + ": " + walked : std::string(text));
+    if (ch.base == 0x10009000u && g_vif1_stalled) return;  // STR stays set: not done
+    *Register(chcr) &= ~0x100u;                         // done
+    SetDStat(d_stat | (1u << ch.status_bit));
+    PostDmac(ch.status_bit);
 }
 
 void InstallDevices() {
     Memory& m = GuestMemory();
     for (const Channel& ch : kChannels) {
         if (ch.base == 0x1000B000u || ch.base == 0x1000B400u) continue;     // the IPU's (ipu.cpp)
-        const u32 chcr = ch.base, madr = ch.base + kMadr, qwc = ch.base + kQwc;
-        m.OnWrite(chcr, [ch, madr, qwc, chcr](u32, u64 value) {
+        m.OnWrite(ch.base, [ch](u32, u64 value) {
             if (!(value & 0x100)) return;                       // STR not set
-            Memory& memory = GuestMemory();
-            // The text only when it is logged: a DMA start is thousands a second.
-            const std::string key = std::string("dma ") + ch.name;
-            const bool traced = gs::TheGs().trace && (ch.base == 0x10009000u || ch.base == 0x1000A000u);
-            const bool describe = traced || Noting(key);
-            char text[256] = "";
-            if (describe)
-                std::snprintf(text, sizeof text,
-                              "DMA %s started: CHCR=0x%08X MADR=0x%08X QWC=%u TADR=0x%08X (completed at once)",
-                              ch.name, unsigned(value), unsigned(memory.Read(madr, 4)),
-                              unsigned(memory.Read(qwc, 4)), unsigned(memory.Read(ch.base + kTadr, 4)));
-            if (traced) std::fprintf(gs::TheGs().trace_out, "[dma] %s\n", text);
-            if (ch.base == 0x10009000u) ++g_vif1_transfers;
-            const std::string walked = ch.walked ? Walk(ch, u32(value), describe) : std::string();
-            if (describe) Note(key, ch.walked ? std::string(text) + ": " + walked : std::string(text));
-            *Register(chcr) &= ~0x100u;                         // done
-            SetDStat(d_stat | (1u << ch.status_bit));
-            PostDmac(ch.status_bit);
+            StartTransfer(ch, u32(value));
         });
     }
+    // VIF1_FBRST: STC (bit 3) ends a stall at an interrupt bit, and the
+    // transfer goes on; RST (bit 0) resets VIF1 - its stall with it.
+    m.OnWrite(kVif1Fbrst, [](u32, u64 value) {
+        if (value & 1) {
+            g_vif1_scan.Reset();
+            g_vif1_leftover.clear();
+            g_vif1_end_pending = false;
+            g_vif1_stalled = false;
+            *Register(kVif1Stat) &= ~(kVifStatVis | kVifStatInt);
+        }
+        if ((value & 8) && g_vif1_stalled) {
+            g_vif1_stalled = false;
+            *Register(kVif1Stat) &= ~(kVifStatVis | kVifStatInt);
+            StartTransfer(kChannels[1], *Register(kChannels[1].base));
+        }
+    });
     m.OnWrite(kDStat, [](u32, u64 value) {
         const u32 written = u32(value);
         SetDStat((d_stat & ~(written & 0xFFFFu)) ^ (written & 0xFFFF0000u));
@@ -733,6 +826,15 @@ void InstallDevices() {
                 if (cmd == 0x06) ShadowMask((word >> 15) & 1);
                 else if (!(cmd <= 0x05 || cmd == 0x07 || cmd == 0x10 || cmd == 0x11 || cmd == 0x13))
                     g_gif_shadow.known = false;
+            }
+        }
+        // The interrupt scanner follows these words too. Stored by the EE,
+        // they are not held back: a bit among them raises the interrupt only.
+        for (u32 word : words) {
+            if (g_vif1_scan.Scan(&word, 1).stall && !(*Register(kVif1Err) & 1)) {
+                ++g_vif1_stalls;
+                *Register(kVif1Stat) |= kVifStatInt;
+                PostIntc(kIntcVif1);
             }
         }
         Vif1Run([words] {

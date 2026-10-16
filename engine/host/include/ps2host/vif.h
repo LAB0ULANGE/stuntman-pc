@@ -84,6 +84,31 @@ private:
     void Start(std::uint32_t pc);
 };
 
+/* Words of data an UNPACK of `num` elements in format `format` reads, under
+   STCYCL's CL and WL (with WL > CL only CL of every WL elements are data). */
+std::uint32_t VifUnpackWords(std::uint32_t format, std::uint32_t num, std::uint32_t cl, std::uint32_t wl);
+
+/* Where a VIF stream stalls for a VIFcode's interrupt bit (bit 31): after that
+   command, its data included - the VIF raises its interrupt there and takes
+   nothing more until the EE writes FBRST.STC. Only lengths are followed (the
+   rules VifStream decodes by), so a DMA transfer can be stopped where the VIF
+   would stop, before its words reach the VifStream that runs them. It must see
+   every word the stream sees, in order. */
+class VifInterruptScanner {
+public:
+    struct Stop {
+        std::uint32_t words;        /* of those given, how many go before the stall */
+        bool stall;                 /* the last of them ends a command with the bit */
+    };
+    Stop Scan(const std::uint32_t* words, std::uint32_t count);
+    void Reset() { *this = VifInterruptScanner(); }
+
+private:
+    std::uint32_t pending_ = 0;     /* data words still owed to the last command */
+    std::uint32_t cycle_length_ = 0, write_length_ = 0;
+    bool stall_after_data_ = false; /* the command owing them had the bit */
+};
+
 /* The VIF1 stream fed by stores to its FIFO, 0x10005000. */
 VifStream& Vif1();
 /* VIF0's, at 0x10004000; it feeds VU0. */

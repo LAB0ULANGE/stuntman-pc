@@ -441,6 +441,8 @@ void Report(const Options& options, const std::string& outcome) {
         std::printf("\n");
     }
     std::printf("VIF1 commands:%s\n", Vif1().Summary().c_str());
+    // Whether the game goes through VIF1's interrupt-bit stalls at all.
+    std::printf("VIF1: %llu interrupt stalls\n", static_cast<unsigned long long>(Vif1InterruptStalls()));
     std::printf("GS: %llu primitives, %llu pixels written\n",
                 static_cast<unsigned long long>(gs::TheGs().primitives()),
                 static_cast<unsigned long long>(gs::TheGs().pixels_drawn()));
