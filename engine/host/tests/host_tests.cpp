@@ -1025,6 +1025,30 @@ void HostServersSendCommandsAfterTheirAnswer() {
     Check(!ps2host::DeliverIopReply(), "nothing more");
 }
 
+// padman's scePadSetActAlign (command 8, dbc.cpp): done, where libpad 2.3
+// (+0xC) and 2.4 (+0x14) read it - Stuntman's controller set-up waits on +0x14.
+void PadmanSetActAlignIsDone() {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 receive = 0x01E00000u, answer = 0x01E05000u;
+    ps2host::InstallDbc();
+    const u32 server = BindSifServer(0x80000100u, receive);
+    for (u32 i = 0; i < 0x80; i += 4) m.Write(answer + i, 0xEEEEEEEEu, 4);
+    std::vector<u32> call(16, 0);
+    call[2] = 0x8000000Au;
+    call[8] = 1;                                             // procedure
+    call[10] = answer;                                       // receive
+    call[11] = 0x80;                                         // receive size
+    call[13] = server;
+    std::vector<u32> request(0x20, 0);
+    request[0] = 8;                                          // scePadSetActAlign
+    request[3] = 0x00000100u;                                // align: motor 0, then 1
+    request[4] = 0xFFFFFFFFu;
+    SendSifPacket(call, request);
+    Check(m.Read(answer + 0xC, 4) == 1 && m.Read(answer + 0x14, 4) == 1,
+          "scePadSetActAlign answered done at +0xC (libpad 2.3) and +0x14 (2.4)");
+    ps2host::DeliverIopReply();                              // its RPC end
+}
+
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
 // listing the game's "open" reads sizes from, the answers it maps to errors.
 void MemoryCardKeepsSaves() {
@@ -1623,6 +1647,7 @@ int main() {
     Cop0CountFollowsTheClock();
     HostServersSendCommandsAfterTheirAnswer();
     FileIoCompletesAsynchronousRequests();
+    PadmanSetActAlignIsDone();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();

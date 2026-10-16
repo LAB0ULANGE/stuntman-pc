@@ -275,6 +275,14 @@ std::vector<u8> Padman(u32 /*procedure*/, const std::vector<u8>& request) {
             PadAreas().erase(u64(At(request, 4)) << 32 | At(request, 8));
             Put(answer, 0xC, 1);
             return answer;
+        case 0x08:
+            // scePadSetActAlign: +4 port, +8 slot, +0xC the six actuator
+            // bytes. libpad 2.4 ("PsIIlibpad  2410", Stuntman's 0x00247AB8)
+            // reads the result at +0x14 and goes on only when it is 1; 2.3's
+            // at +0xC. Done, in both.
+            Put(answer, 0xC, 1);
+            Put(answer, 0x14, 1);
+            return answer;
         default: {
             char text[96];
             std::snprintf(text, sizeof text, "PAD: padman command 0x%X (answered done)", unsigned(command));
