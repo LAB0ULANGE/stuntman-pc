@@ -118,6 +118,11 @@ bool IopReplyPending();
 /* A packet from the IOP to the EE (a module's sceSifSendCmd): queued, and
    delivered as the SIF0 interrupt at the next safe point. */
 void QueueIopPacket(std::vector<u8> packet);
+/* sceSifSendCmd for the host's own IOP servers (iop.cpp): `data` written to the
+   EE at `dest`, then a command packet - header (sizes, `dest`, `command`) and
+   `fields` - for the EE's handler of `command`. Sent while a server answers an
+   RPC call, it follows that call's RPC end. */
+void SendCmdToEe(u32 command, const std::vector<u8>& fields, u32 dest, const std::vector<u8>& data);
 /* A host RPC server's: its answer (the RPC end) reaches the EE `ns` later, on
    the host clock (virtual under --virtual-time) - a device's time, such as a
    CD read's. */

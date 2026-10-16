@@ -53,6 +53,8 @@ struct Iop {
     std::map<u32, u32> servers;          // server id -> pretended IOP address
     std::deque<Reply> replies;           // packets for the EE, not yet delivered
     u64 next_delay_ns = 0;               // DelayRpcReply's, for the next RPC end
+    bool in_server_call = false;         // a host server is answering a call
+    std::vector<std::vector<u8>> after_end;  // its SendCmdToEe's: after its RPC end
 };
 
 Iop& I() {
@@ -168,6 +170,11 @@ void Command(const std::vector<u8>& packet, const std::vector<u8>& data) {
             std::vector<u8> reply;
             auto implemented = Servers().find(sid);
             if (implemented != Servers().end()) {
+                struct Answering {
+                    bool& flag;
+                    explicit Answering(bool& f) : flag(f) { flag = true; }
+                    ~Answering() { flag = false; }
+                } answering(iop.in_server_call);
                 reply = implemented->second(procedure, data);
             } else {
                 // Who called: the library function behind the RPC, for naming it.
@@ -184,6 +191,11 @@ void Command(const std::vector<u8>& packet, const std::vector<u8>& data) {
             for (u32 i = 0; i < receive_size && receive; ++i)
                 m.Write(receive + i, i < reply.size() ? reply[i] : 0, 1);
             QueueEnd(packet, kRpcCall, server, server + 0x100, server + 0x200);
+            // What the server sent the EE while answering - an asynchronous
+            // request's completion - follows its answer, as from an IOP that
+            // answers first and finishes the work after.
+            for (std::vector<u8>& sent : iop.after_end) QueueIopPacket(std::move(sent));
+            iop.after_end.clear();
             return;
         }
         default:
@@ -251,6 +263,21 @@ void QueueRpcEnd(const std::vector<u8>& request, u32 server, u32 buffer, u32 cbu
 void QueueIopPacket(std::vector<u8> packet) {
     I().replies.push_back({std::move(packet), 0});
     RequestDelivery();
+}
+
+void SendCmdToEe(u32 command, const std::vector<u8>& fields, u32 dest, const std::vector<u8>& data) {
+    Memory& m = GuestMemory();
+    for (std::size_t i = 0; i < data.size(); ++i) m.Write(dest + u32(i), data[i], 1);
+    // The header, as sceSifSendCmd fills it: packet size and data size, where
+    // the data went, the command; then the command's own fields.
+    std::vector<u8> packet(16 + fields.size(), 0);
+    PutWord(packet, 0, (u32(packet.size()) & 0xFF) | (u32(data.size()) << 8));
+    PutWord(packet, 4, dest);
+    PutWord(packet, 8, command);
+    if (!fields.empty()) std::memcpy(packet.data() + 16, fields.data(), fields.size());
+    Iop& iop = I();
+    if (iop.in_server_call) iop.after_end.push_back(std::move(packet));
+    else QueueIopPacket(std::move(packet));
 }
 
 void DelayRpcReply(u64 ns) { I().next_delay_ns = ns; }

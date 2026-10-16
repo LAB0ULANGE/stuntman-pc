@@ -848,6 +848,57 @@ void Cop0CountFollowsTheClock() {
     ps2host::SetVirtualClock(false);
 }
 
+// The EE sends a SIF command packet as the SDK does: the packet in EE memory,
+// one SifSetDma transfer naming it (run.h's SifDma).
+void SendSifPacket(std::vector<u32> words) {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 packet = 0x01E11000u, transfers = 0x01E10000u;
+    words[0] = u32(words.size() * 4);                        // the header's own size
+    for (std::size_t i = 0; i < words.size(); ++i) m.Write(packet + u32(4 * i), words[i], 4);
+    m.Write(transfers, packet, 4);
+    m.Write(transfers + 4, 0, 4);
+    m.Write(transfers + 8, u32(words.size() * 4), 4);
+    m.Write(transfers + 12, 0, 4);
+    ps2host::SifDma(transfers, 1);
+}
+
+// SendCmdToEe (run.h): a host server's command to the EE - its data where it
+// said, its header as sceSifSendCmd's - and, sent while the server answers a
+// call, delivered after that call's RPC end (Stuntman's fileio completes an
+// asynchronous read with command 0x80000011 after answering it).
+void HostServersSendCommandsAfterTheirAnswer() {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 receive = 0x01E00000u, dest = 0x01E02000u;
+    ps2host::RegisterRpcServer(0x7E570000u, [&](u32, const std::vector<u8>&) {
+        ps2host::SendCmdToEe(0x80000011u, {0xAA, 0xBB, 0xCC, 0xDD}, dest, {1, 2, 3, 4, 5});
+        return std::vector<u8>(4, 0);
+    });
+    std::vector<u32> saddr(8, 0);
+    saddr[2] = 0x80000000u;
+    saddr[4] = receive;
+    SendSifPacket(saddr);
+    std::vector<u32> bind(16, 0);
+    bind[2] = 0x80000009u;
+    bind[8] = 0x7E570000u;
+    SendSifPacket(bind);
+    Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000008u, "the bind's RPC end");
+    const u32 server = u32(m.Read(receive + 36, 4));
+    std::vector<u32> call(16, 0);
+    call[2] = 0x8000000Au;
+    call[8] = 1;                                             // procedure
+    call[13] = server;
+    SendSifPacket(call);
+    Check(m.Read(dest, 4) == 0x04030201u && m.Read(dest + 4, 1) == 5u, "the command's data, where it said");
+    Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000008u &&
+              m.Read(receive + 32, 4) == 0x8000000Au,
+          "the call's RPC end first");
+    Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000011u &&
+              m.Read(receive, 4) == (20u | (5u << 8)) && m.Read(receive + 4, 4) == dest &&
+              m.Read(receive + 16, 4) == 0xDDCCBBAAu,
+          "then the command: its header and fields");
+    Check(!ps2host::DeliverIopReply(), "nothing more");
+}
+
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
 // listing the game's "open" reads sizes from, the answers it maps to errors.
 void MemoryCardKeepsSaves() {
@@ -1364,6 +1415,7 @@ int main() {
     IopImageGivesModuleReleases();
     StopIsWrittenUntilTheRunStops();
     Cop0CountFollowsTheClock();
+    HostServersSendCommandsAfterTheirAnswer();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();
