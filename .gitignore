@@ -30,3 +30,6 @@ venv/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Pictures taken from the port (made from the disc): never committed.
+captures/
