@@ -90,9 +90,14 @@ def discovered_functions(game, path: str) -> dict:
     with open(path, encoding="utf-8") as handle:
         pairs = {(int(run, 16), int(source, 16)) for run, source in
                  (line.split() for line in handle if line.strip())}
+    # The source may lie outside .text: Stuntman copies kernel extensions from .data.
+    loaded = [(elf.section_data(s), s.addr) for s in elf.sections
+              if s.is_alloc and s.size and s.type != 8]
     for run, source in sorted(pairs):
-        offset = source - section.addr
-        code = image[offset:offset + gaps.MAX_FUNCTION]
+        holder = next(((data, addr) for data, addr in loaded
+                       if addr <= source < addr + len(data)), (image, section.addr))
+        offset = source - holder[1]
+        code = holder[0][offset:offset + gaps.MAX_FUNCTION]
         try:
             length = gaps.function_extent(code, run, run)
             found[run] = (source, lift.lift_function(code, run, run, run + length))
