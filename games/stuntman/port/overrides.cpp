@@ -12,8 +12,14 @@
  */
 
 #include "ps2host/host.h"
+#include "ps2host/iop_vm.h"
 #include "ps2host/run.h"
 
 void RegisterGameOverrides() {
     // ps2host::Override(0x00123456u, SomeHook, "what it does and why");
+
+    // The game's own IOP modules run in the IOP interpreter (PORTING.md):
+    // XAVSTRM.IRX ("xavstr v1.1") serves RPC 0x7F7F7F7F, whose client
+    // (0x002039D0) requires version 0x101 and stops for ever otherwise.
+    ps2host::iop::RunModule("XAVSTRM.IRX");
 }
