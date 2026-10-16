@@ -33,3 +33,6 @@ Thumbs.db
 
 # Pictures taken from the port (made from the disc): never committed.
 captures/
+
+# The player's own copy of the port (the game's code, compiled): never committed.
+play/
