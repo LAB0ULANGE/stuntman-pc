@@ -240,6 +240,86 @@ void DmaChainsAreWalked() {
     Check(!ps2host::SendDma(loop, [](u32) {}, 100).ended, "a looping chain is cut off");
 }
 
+// VIF1's interrupt bit (vif.h): the scanner stops after the command carrying
+// it, its data included, however the words arrive; a data word that looks
+// like a VIFcode is data.
+void VifInterruptBitStopsAfterItsCommand() {
+    ps2host::VifInterruptScanner scan;
+    const u32 kFlushaI = 0x93000000u, kNop = 0, kStcycl11 = 0x01000101u;
+    const u32 plain[] = {kNop, kFlushaI, kNop};
+    auto stop = scan.Scan(plain, 3);
+    Check(stop.stall && stop.words == 2, "a FLUSHA with the bit: the stall right after it");
+    stop = scan.Scan(plain + 2, 1);
+    Check(!stop.stall && stop.words == 1, "then the stream goes on");
+    // UNPACK V4-32 of 2 elements (8 words) with the bit: after its data.
+    const u32 unpack[] = {kStcycl11, 0xEC020000u, 1, 2, 3, kFlushaI, 5, 6, 7, 8, kNop};
+    stop = scan.Scan(unpack, 11);
+    Check(stop.stall && stop.words == 10, "an UNPACK with the bit: after its data, not at a look-alike in it");
+    stop = scan.Scan(unpack + 10, 1);
+    ps2host::VifInterruptScanner split;
+    stop = split.Scan(unpack, 5);
+    Check(!stop.stall && stop.words == 5, "its data split across transfers: no stall yet");
+    stop = split.Scan(unpack + 5, 6);
+    Check(stop.stall && stop.words == 5, "the stall where its data ends");
+    // DIRECT of 1 quadword with the bit; an UNPACK without it, whose data
+    // holds 0x93000000, does not stall.
+    ps2host::VifInterruptScanner direct;
+    const u32 words[] = {0xD0000001u, 9, 9, 9, 9, 0x6C010000u, kFlushaI, 0, 0, 0, kNop};
+    stop = direct.Scan(words, 11);
+    Check(stop.stall && stop.words == 5, "a DIRECT with the bit: after its quadword");
+    stop = direct.Scan(words + 5, 6);
+    Check(!stop.stall && stop.words == 6, "data that looks like a VIFcode is data");
+}
+
+// A transfer to a peripheral that stalls (dma.h, SendDmaBlocksUntil): it
+// stops there, keeps what it read past the stall, and goes on from there.
+void DmaStallsAndGoesOn() {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 chain = 0x00230000u;
+    // cnt: its upper half NOP, FLUSHA|i (Stuntman's tags), one quadword of
+    // data; then end, its upper half NOP NOP.
+    PutTag(chain, 1, 1, 0, 0x00000000u, 0x93000000u);
+    for (u32 i = 0; i < 4; ++i) m.Write(chain + 16 + 4 * i, 0xD0 + i, 4);
+    PutTag(chain + 32, 0, 7, 0, 0, 0);
+    ps2host::VifInterruptScanner scan;
+    std::vector<u32> got;
+    const ps2host::DmaStallingSink sink = [&](const u32* words, u32 count, u32) {
+        const auto stop = scan.Scan(words, count);
+        got.insert(got.end(), words, words + stop.words);
+        return ps2host::DmaTaken{stop.words, stop.stall};
+    };
+    ps2host::DmaChannelState ch{0x145u, 0, 0, chain, 0, 0};
+    ps2host::DmaOutcome out = ps2host::SendDmaBlocksUntil(ch, sink);
+    Check(out.stalled && !out.ended && got.size() == 2 && got[1] == 0x93000000u,
+          "a chain stalls at an interrupt bit in a tag's upper half");
+    Check(ch.madr == chain + 16 && ch.qwc == 1 && ch.tadr == chain + 32 && out.leftover_count == 0,
+          "with that tag's data owed");
+    out = ps2host::SendDmaBlocksUntil(ch, sink);
+    Check(!out.stalled && out.ended && got.size() == 2 + 4 + 2 && got[2] == 0xD0u,
+          "going on: the tag's data, then the rest to the end");
+    // Normal mode, stalled inside a quadword: the rest of it is kept.
+    const u32 data = 0x00231000u;
+    const u32 normal[8] = {0, 0x93000000u, 0x11, 0x22, 0, 0, 0, 0};
+    for (u32 i = 0; i < 8; ++i) m.Write(data + 4 * i, normal[i], 4);
+    ps2host::VifInterruptScanner fresh;
+    scan = fresh;
+    got.clear();
+    ps2host::DmaChannelState n{0x101u, data, 2, 0, 0, 0};
+    out = ps2host::SendDmaBlocksUntil(n, sink);
+    Check(out.stalled && got.size() == 2 && n.madr == data + 16 && n.qwc == 1 && out.leftover_count == 2 &&
+              out.leftover[0] == 0x11 && out.leftover[1] == 0x22,
+          "stalled inside a quadword: the rest of it kept, the next one owed");
+    // A chain stalled in its end tag's data has ended once that data is sent.
+    PutTag(chain, 1, 7, 0, 0x93000000u, 0);
+    scan = fresh;
+    got.clear();
+    ps2host::DmaChannelState e{0x145u, 0, 0, chain, 0, 0};
+    out = ps2host::SendDmaBlocksUntil(e, sink);
+    Check(out.stalled && e.end_pending && e.qwc == 1 && out.leftover_count == 1, "stalled in an end tag");
+    out = ps2host::SendDmaBlocksUntil(e, sink);
+    Check(out.ended && !out.stalled && e.qwc == 0 && !e.end_pending, "its data sent, the chain has ended");
+}
+
 // Every format's layout maps a page's pixels onto distinct bytes (nibbles).
 void GsLayoutsArePermutations() {
     using namespace ps2host::gs;
@@ -1521,6 +1601,8 @@ int main() {
     WideWritesReachEveryWordsHook();
     VifSkipsDataAndAppliesMaskPath3();
     DmaChainsAreWalked();
+    VifInterruptBitStopsAfterItsCommand();
+    DmaStallsAndGoesOn();
     GsLayoutsArePermutations();
     GsDrawsASprite();
     GsFogsTowardsFogcol();
