@@ -9,7 +9,8 @@
  *   sysmem, sysclib, stdio   memory, C library, console output (logged as [iop])
  *   intrman                  interrupts: the host has no interrupt masking
  *   thbase, thsemap, thevent the IOP kernel's threads, semaphores, event flags,
- *                            clock and alarms, on the interpreter's scheduler
+ *   thfpool                  fixed-size memory pools, clock and alarms, on the
+ *                            interpreter's scheduler
  *   sifman, sifcmd           SIF DMA and commands, to and from the EE (iop.cpp)
  *   libsd                    the sound processor (SPU2): state is kept, sound
  *                            data is copied into SPU RAM, and transfer interrupts
@@ -397,6 +398,88 @@ Outcome ReferEventFlagStatus(Vm& vm, Context& c) {
     return Ret(c, KE_OK);
 }
 
+// ---------------------------------------------------------------- fixed-size pools
+
+// thfpool: CreateFpl(iop_fpl_param_t*: attr, option, block_size, blocks) takes
+// blocks * block_size from the heap; AllocateFpl gives a block or, with none
+// free, waits as WaitSema does - FreeFpl then hands the freed block straight
+// to the first waiter; pAllocateFpl/ipAllocateFpl answer KE_NO_MEMORY instead.
+constexpr s32 KE_NO_MEMORY = -400, KE_ILLEGAL_MEMSIZE = -427, KE_UNKNOWN_FPLID = -412;
+constexpr s32 KE_ILLEGAL_MEMBLOCK = -426, KE_WAIT_DELETE = -425;
+
+Outcome CreateFpl(Vm& vm, Context& c) {
+    const u32 p = A(vm, c, 0);
+    FixedPool pool;
+    pool.attr = vm.Read(p, 4);
+    const s32 size = s32(vm.Read(p + 8, 4)), blocks = s32(vm.Read(p + 12, 4));
+    if (size <= 0 || blocks <= 0) return Ret(c, u32(KE_ILLEGAL_MEMSIZE));
+    pool.block_size = (u32(size) + 3) & ~3u;         // blocks stay word-aligned
+    pool.blocks = u32(blocks);
+    pool.base = vm.Allocate(pool.block_size * pool.blocks);
+    if (!pool.base) return Ret(c, u32(KE_NO_MEMORY));
+    for (u32 i = 0; i < pool.blocks; ++i) pool.free.push_back(pool.base + i * pool.block_size);
+    const u32 id = vm.next_id++;
+    vm.pools[id] = std::move(pool);
+    return Ret(c, id);
+}
+
+Outcome DeleteFpl(Vm& vm, Context& c) {
+    auto found = vm.pools.find(A(vm, c, 0));
+    if (found == vm.pools.end()) return Ret(c, u32(KE_UNKNOWN_FPLID));
+    for (u32 id : found->second.waiting) {
+        Thread& t = vm.threads[id];
+        t.c.r[2] = u32(KE_WAIT_DELETE);
+        vm.MakeReady(t);
+    }
+    vm.Free(found->second.base);
+    vm.pools.erase(found);
+    return Ret(c, KE_OK);
+}
+
+Outcome AllocateFpl(Vm& vm, Context& c) {
+    auto found = vm.pools.find(A(vm, c, 0));
+    if (found == vm.pools.end()) return Ret(c, u32(KE_UNKNOWN_FPLID));
+    FixedPool& pool = found->second;
+    if (!pool.free.empty()) {
+        const u32 block = pool.free.front();
+        pool.free.pop_front();
+        return Ret(c, block);
+    }
+    if (!vm.Block(c, Wait::Fpl, found->first)) return Ret(c, u32(KE_CAN_NOT_WAIT));
+    pool.waiting.push_back(vm.current);
+    return Outcome::Block;
+}
+
+Outcome PollAllocateFpl(Vm& vm, Context& c) {
+    auto found = vm.pools.find(A(vm, c, 0));
+    if (found == vm.pools.end()) return Ret(c, u32(KE_UNKNOWN_FPLID));
+    FixedPool& pool = found->second;
+    if (pool.free.empty()) return Ret(c, u32(KE_NO_MEMORY));
+    const u32 block = pool.free.front();
+    pool.free.pop_front();
+    return Ret(c, block);
+}
+
+Outcome FreeFpl(Vm& vm, Context& c) {
+    auto found = vm.pools.find(A(vm, c, 0));
+    if (found == vm.pools.end()) return Ret(c, u32(KE_UNKNOWN_FPLID));
+    FixedPool& pool = found->second;
+    const u32 block = A(vm, c, 1);
+    if (block < pool.base || block >= pool.base + pool.block_size * pool.blocks ||
+        (block - pool.base) % pool.block_size != 0)
+        return Ret(c, u32(KE_ILLEGAL_MEMBLOCK));
+    if (!pool.waiting.empty()) {
+        Thread& t = vm.threads[pool.waiting.front()];
+        pool.waiting.pop_front();
+        t.c.r[2] = block;                            // its AllocateFpl's result
+        vm.MakeReady(t);
+    } else {
+        pool.free.push_back(block);
+    }
+    Return(c, KE_OK);
+    return vm.reschedule && !vm.in_interrupt ? Outcome::Yield : Outcome::Return;
+}
+
 // ---------------------------------------------------------------- memory, C library
 
 Outcome AllocSysMemory(Vm& vm, Context& c) { return Ret(c, vm.Allocate(A(vm, c, 1))); }
@@ -492,6 +575,28 @@ Outcome Strtol(Vm& vm, Context& c) {
     const long value = std::strtol(text.c_str(), &stop, int(A(vm, c, 2)));
     if (end) vm.Write(end, s + u32(stop - text.c_str()), 4);
     return Ret(c, u32(value));
+}
+
+Outcome Strtoul(Vm& vm, Context& c) {
+    const u32 s = A(vm, c, 0), end = A(vm, c, 1);
+    const std::string text = vm.String(s, 256);
+    char* stop = nullptr;
+    // 32-bit unsigned long on the IOP: out of range saturates there, as strtoul's does.
+    const unsigned long long value = std::strtoull(text.c_str(), &stop, int(A(vm, c, 2)));
+    if (end) vm.Write(end, s + u32(stop - text.c_str()), 4);
+    const bool negative = text.find_first_not_of(" \t\n\v\f\r") != std::string::npos &&
+                          text[text.find_first_not_of(" \t\n\v\f\r")] == '-';
+    u32 result;
+    if (negative) result = u32(value);               // strtoul negates in the unsigned type
+    else result = value > 0xFFFFFFFFull ? 0xFFFFFFFFu : u32(value);
+    return Ret(c, result);
+}
+
+Outcome Strstr(Vm& vm, Context& c) {
+    const u32 s = A(vm, c, 0);
+    const std::string text = vm.String(s, 1u << 20), want = vm.String(A(vm, c, 1), 1u << 20);
+    const std::size_t at = text.find(want);
+    return Ret(c, at == std::string::npos ? 0 : s + u32(at));
 }
 
 // Arguments of a variadic call: from argument `first` on.
@@ -668,6 +773,9 @@ Outcome CdGetDiskType(Vm&, Context& c) {                          // SCECdPS2CD,
     return Ret(c, GuestDisc().IsCd() ? 0x12 : 0x14);
 }
 Outcome CdDiskReady(Vm&, Context& c) { return Ret(c, 2); }         // SCECdComplete
+// sceCdMmode(media): the media the drive is told to expect (CD, DVD); the host
+// reads the disc image as it is. 1: done.
+Outcome CdMmode(Vm&, Context& c) { return Ret(c, 1); }
 
 Outcome FlushDcache(Vm&, Context& c) { return Ret(c, 0); }
 Outcome CheckInit(Vm&, Context& c) { return Ret(c, 1); }
@@ -883,7 +991,8 @@ const Map& Table() {
         {{"sysclib", 17}, Bzero}, {{"sysclib", 19}, Sprintf}, {{"sysclib", 20}, Strcat},
         {{"sysclib", 21}, Strchr}, {{"sysclib", 22}, Strcmp}, {{"sysclib", 23}, Strcpy},
         {{"sysclib", 27}, Strlen}, {{"sysclib", 29}, Strncmp}, {{"sysclib", 30}, Strncpy},
-        {{"sysclib", 32}, Strrchr}, {{"sysclib", 36}, Strtol}, {{"sysclib", 42}, Vsprintf},
+        {{"sysclib", 32}, Strrchr}, {{"sysclib", 34}, Strstr}, {{"sysclib", 36}, Strtol},
+        {{"sysclib", 38}, Strtoul}, {{"sysclib", 42}, Vsprintf},
         {{"intrman", 4}, Succeed}, {{"intrman", 5}, Succeed}, {{"intrman", 6}, Succeed},
         {{"intrman", 7}, Succeed}, {{"intrman", 8}, Succeed}, {{"intrman", 9}, Succeed},
         {{"intrman", 17}, CpuSuspendIntr}, {{"intrman", 18}, Succeed},
@@ -920,6 +1029,9 @@ const Map& Table() {
         {{"sifman", 32}, SetDmaIntr},
         {{"cdvdman", 4}, Succeed}, {{"cdvdman", 6}, CdRead}, {{"cdvdman", 8}, CdGetError},
         {{"cdvdman", 11}, CdSync}, {{"cdvdman", 12}, CdGetDiskType}, {{"cdvdman", 13}, CdDiskReady},
+        {{"cdvdman", 75}, CdMmode},
+        {{"thfpool", 4}, CreateFpl}, {{"thfpool", 5}, DeleteFpl}, {{"thfpool", 6}, AllocateFpl},
+        {{"thfpool", 7}, PollAllocateFpl}, {{"thfpool", 8}, PollAllocateFpl}, {{"thfpool", 9}, FreeFpl},
         {{"loadcore", 5}, FlushDcache},
         {{"libsd", 2}, SdInit}, {{"libsd", 4}, SdInit},
         {{"libsd", 5}, SdSetParam}, {{"libsd", 6}, SdGetParam},

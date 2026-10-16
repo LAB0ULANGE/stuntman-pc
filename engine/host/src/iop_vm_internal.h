@@ -32,7 +32,7 @@ struct Context {
     u32 pc = 0, npc = 4;
 };
 
-enum class Wait { None, Sema, Event, Sleep, Delay, Dormant, Rpc };
+enum class Wait { None, Sema, Event, Sleep, Delay, Dormant, Rpc, Fpl };
 
 struct RpcRequest {
     u32 server = 0, procedure = 0, size = 0, receive = 0, receive_size = 0;
@@ -69,6 +69,14 @@ struct EventFlag {
     u32 bits = 0, attr = 0;
 };
 
+// A fixed-size memory pool (thfpool): `blocks` blocks of `block_size` bytes
+// from `base`; the free ones, and the threads waiting for one, in order.
+struct FixedPool {
+    u32 attr = 0, base = 0, block_size = 0, blocks = 0;
+    std::deque<u32> free;           // block addresses
+    std::deque<u32> waiting;        // thread ids
+};
+
 struct Alarm {
     u64 due_us = 0;
     u32 handler = 0, arg = 0;
@@ -92,6 +100,7 @@ struct Vm {
     u32 next_id = 1;
     std::map<u32, Semaphore> semaphores;
     std::map<u32, EventFlag> events;
+    std::map<u32, FixedPool> pools;
     std::map<u32, Alarm> alarms;
     std::vector<std::pair<u32, u32>> completions;  // (function, data): DMA-done callbacks due
     std::map<u32, std::pair<u32, u32>> command_handlers;   // command -> (function, data)

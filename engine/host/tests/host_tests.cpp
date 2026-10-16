@@ -1326,6 +1326,68 @@ const CpuVector kCpuVectors[] = {
 #include "iop_cpu_vectors.inc"
 };
 
+// The IOP library functions Stuntman's XAVSTRM.IRX needs beyond the rest
+// (iop_libs.cpp): thfpool's fixed-size pools - blocks handed out, a thread
+// waiting for one as WaitSema waits and woken with the block FreeFpl frees,
+// the poll's KE_NO_MEMORY - sysclib's strstr and strtoul, cdvdman's sceCdMmode.
+void IopPoolsAndLibraryCalls() {
+    using namespace ps2host::iop;
+    Vm& vm = TheVm();
+    auto call = [&](const char* library, u32 index, std::vector<u32> args, Outcome* outcome = nullptr) {
+        Context c;
+        for (std::size_t i = 0; i < args.size() && i < 4; ++i) c.r[4 + i] = args[i];
+        const Outcome o = FindLibrary(library, index)(vm, c);
+        if (outcome) *outcome = o;
+        return c.r[2];
+    };
+    const u32 param = 0x001F0000u, text = 0x001F0100u, end = 0x001F0200u;
+    vm.Write(param, 0, 4);                                   // attr
+    vm.Write(param + 4, 0, 4);                               // option
+    vm.Write(param + 8, 30, 4);                              // block size: 32 once aligned
+    vm.Write(param + 12, 2, 4);                              // blocks
+    const u32 pool = call("thfpool", 4, {param});
+    Check(s32(pool) > 0, "CreateFpl gives a pool");
+    const u32 first = call("thfpool", 6, {pool}), second = call("thfpool", 6, {pool});
+    Check(first && second == first + 32, "AllocateFpl gives word-aligned blocks in turn");
+    Check(s32(call("thfpool", 7, {pool})) == -400, "pAllocateFpl with none free: KE_NO_MEMORY");
+    // A thread waits for a block; another frees one, which goes to the waiter.
+    vm.threads[900].id = 900;
+    vm.threads[901].id = 901;
+    const u32 saved_current = vm.current;
+    vm.current = 900;
+    Outcome waited = Outcome::Return;
+    call("thfpool", 6, {pool}, &waited);
+    Check(waited == Outcome::Block && vm.threads[900].wait == Wait::Fpl, "AllocateFpl with none free waits");
+    vm.current = 901;
+    Check(call("thfpool", 9, {pool, second}) == 0, "FreeFpl");
+    Check(vm.threads[900].ready && vm.threads[900].c.r[2] == second, "the waiter wakes with the freed block");
+    Check(s32(call("thfpool", 9, {pool, first + 4})) == -426, "FreeFpl of no block: KE_ILLEGAL_MEMBLOCK");
+    Check(call("thfpool", 9, {pool, first}) == 0 && call("thfpool", 7, {pool}) == first,
+          "a block freed with nobody waiting is given again");
+    Check(call("thfpool", 5, {pool}) == 0 && s32(call("thfpool", 6, {pool})) == -412,
+          "DeleteFpl, then the pool is unknown");
+    vm.current = saved_current;
+    vm.threads.erase(900);
+    vm.threads.erase(901);
+    vm.reschedule = false;
+
+    const char* hay = "cdrom0:\\XA\\STREAM.XA;1";
+    for (u32 i = 0; i <= std::strlen(hay); ++i) vm.Write(text + i, u8(hay[i]), 1);
+    const char* needle = "STREAM";
+    for (u32 i = 0; i <= std::strlen(needle); ++i) vm.Write(text + 0x40 + i, u8(needle[i]), 1);
+    Check(call("sysclib", 34, {text, text + 0x40}) == text + 11, "strstr finds the substring");
+    vm.Write(text + 0x40, 'Q', 1);
+    Check(call("sysclib", 34, {text, text + 0x40}) == 0, "strstr: none");
+    const char* number = "  0xFFFFFFF0z";
+    for (u32 i = 0; i <= std::strlen(number); ++i) vm.Write(text + i, u8(number[i]), 1);
+    Check(call("sysclib", 38, {text, end, 16}) == 0xFFFFFFF0u && vm.Read(end, 4) == text + 12,
+          "strtoul: base 16 and the end it stopped at");
+    const char* minus = "-1";
+    for (u32 i = 0; i <= std::strlen(minus); ++i) vm.Write(text + i, u8(minus[i]), 1);
+    Check(call("sysclib", 38, {text, 0, 10}) == 0xFFFFFFFFu, "strtoul of -1 wraps, as C's");
+    Check(call("cdvdman", 75, {1}) == 1, "sceCdMmode succeeds");
+}
+
 void IopInstructionsMatchTheR5900() {
     using namespace ps2host::iop;
     Vm& vm = TheVm();
@@ -1472,6 +1534,7 @@ int main() {
     MmiLanesAreScalar();
     IpuDecodesAndRetriesCleanly();
     IopInstructionsMatchTheR5900();
+    IopPoolsAndLibraryCalls();
     SpuDecodesAdpcmAndPlaysAVoice();
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;
