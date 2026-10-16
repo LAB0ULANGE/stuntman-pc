@@ -142,4 +142,7 @@ void RegisterGameOverrides() {
     // XAVSTRM.IRX ("xavstr v1.1") serves RPC 0x7F7F7F7F, whose client
     // (0x002039D0) requires version 0x101 and stops for ever otherwise.
     ps2host::iop::RunModule("XAVSTRM.IRX");
+    // IOPHEAP.IRX is the game's own ("Stuntman_IOP_Heap v1.0", not Sony's
+    // iopheap): it serves RPC 0x21166779, procedures 256 and 257.
+    ps2host::iop::RunModule("IOPHEAP.IRX");
 }
