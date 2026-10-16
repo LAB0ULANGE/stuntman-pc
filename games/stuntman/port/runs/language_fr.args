@@ -1,0 +1,1 @@
+--virtual-time --memcard {memcard} --until-frame 3000 --press down@280 --press cross@300
