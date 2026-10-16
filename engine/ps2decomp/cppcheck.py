@@ -81,7 +81,9 @@ def find_vcvars() -> str:
     if not os.path.exists(VSWHERE):
         raise CompilerUnavailable("vswhere not found; no Visual Studio installed")
     result = subprocess.run(
-        [VSWHERE, "-latest", "-products", "*", "-property", "installationPath"],
+        [VSWHERE, "-latest", "-products", "*",
+         "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+         "-property", "installationPath"],
         capture_output=True, text=True,
     )
     root = result.stdout.strip()
