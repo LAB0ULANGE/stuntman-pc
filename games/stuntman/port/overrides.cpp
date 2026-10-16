@@ -145,4 +145,6 @@ void RegisterGameOverrides() {
     // IOPHEAP.IRX is the game's own ("Stuntman_IOP_Heap v1.0", not Sony's
     // iopheap): it serves RPC 0x21166779, procedures 256 and 257.
     ps2host::iop::RunModule("IOPHEAP.IRX");
+    // SOUNDM.IRX: the game's sound driver ("StuntSound v2.243").
+    ps2host::iop::RunModule("SOUNDM.IRX");
 }
