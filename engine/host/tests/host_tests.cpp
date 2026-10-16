@@ -1100,6 +1100,14 @@ void PadmanSetActAlignIsDone() {
           "the pad's frame: two actuators, one combination of both");
     Check(m.Read(f + 0x66, 1) == 2 && (m.Read(f + 0x79, 4) & 0xFFFFFFFFu) == 0x0003FFFFu,
           "the pad's frame: a DualShock 2, its 18 buttons' pressure readable");
+    std::vector<u32> press(0x20, 0);
+    press[0] = 0x0A;                                         // scePadEnterPressMode
+    press[3] = 0xFFF;
+    m.Write(answer + 0x10, 0, 4);
+    SendSifPacket(call, press);
+    ps2host::DeliverIopReply();
+    Check(m.Read(answer + 0xC, 4) == 1 && m.Read(answer + 0x10, 4) == 1,
+          "scePadEnterPressMode answered done at +0x10 (libpad 2.4)");
     std::vector<u32> close(0x20, 0);
     close[0] = 0x0E;                                         // scePadPortClose, port 0 slot 0
     SendSifPacket(call, close);

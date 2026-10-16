@@ -240,6 +240,7 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& request) {
 struct PadArea {
     u32 port = 0, slot = 0, area = 0;
     u32 frame = 0;
+    bool pressure = false;          // in pressure mode (command 0x0A)
 };
 std::map<u64, PadArea>& PadAreas() {
     static std::map<u64, PadArea> areas;
@@ -277,6 +278,16 @@ std::vector<u8> Padman(u32 /*procedure*/, const std::vector<u8>& request) {
             PadAreas().erase(u64(At(request, 4)) << 32 | At(request, 8));
             Put(answer, 0xC, 1);
             return answer;
+        case 0x0A: {
+            // scePadEnterPressMode / ExitPressMode (libpad 2.4's 0x00247C48):
+            // +4 port, +8 slot, +0xC the buttons whose pressure is wanted
+            // (0xFFF; 0 to leave). The result is read at +0x10 and must be 1.
+            auto found = PadAreas().find(u64(At(request, 4)) << 32 | At(request, 8));
+            if (found != PadAreas().end()) found->second.pressure = At(request, 0xC) != 0;
+            Put(answer, 0xC, 1);
+            Put(answer, 0x10, 1);
+            return answer;
+        }
         case 0x08:
             // scePadSetActAlign: +4 port, +8 slot, +0xC the six actuator
             // bytes. libpad 2.4 ("PsIIlibpad  2410", Stuntman's 0x00247AB8)
