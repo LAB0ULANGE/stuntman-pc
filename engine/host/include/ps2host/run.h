@@ -406,6 +406,11 @@ u64 ClockNs();
 void SetVirtualClock(bool on);
 bool VirtualClock();
 void AdvanceClock(u64 ns);
+/* COP0 for translated code (mfc0, lifted::read_cop0_hook): Count is the EE's
+   cycles (294,912,000 a second) on ClockNs since StartCop0, which installs the
+   hook; every other register reads as 0 and is noted (timers.cpp). */
+void StartCop0();
+u64 ReadCop0(u32 reg);
 /* Run the INTC handlers for `cause`, if it is enabled (threads.cpp). */
 void RaiseIntc(u32 cause);
 /* INTC_STAT: the causes raised (a frame's vertical blanks, RaiseIntc's), and

@@ -37,7 +37,38 @@ u64 SteadyNs() {
     using namespace std::chrono;
     return u64(duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count());
 }
+
+u64 g_count_from_ns = 0;                // COP0 Count is 0 here (StartCop0)
+constexpr u64 kEeHz = 294912000;        // the EE's clock: Count advances once a cycle
+
+const char* const kCop0Names[32] = {
+    "Index", "Random", "EntryLo0", "EntryLo1", "Context", "PageMask", "Wired", "$7",
+    "BadVAddr", "Count", "EntryHi", "Compare", "Status", "Cause", "EPC", "PRId",
+    "Config", "$17", "$18", "$19", "$20", "$21", "$22", "BadPAddr",
+    "Debug", "Perf", "$26", "$27", "TagLo", "TagHi", "ErrorEPC", "$31"};
 }  // namespace
+
+u64 ReadCop0(u32 reg) {
+    reg &= 31;
+    if (reg == 9) {
+        // Cycles since the run began, from the host's clock: real time, or the
+        // virtual clock under --virtual-time (the same count on every run).
+        const u64 ns = ClockNs() - g_count_from_ns;
+        const u64 cycles = ns / 1000000000ull * kEeHz + ns % 1000000000ull * kEeHz / 1000000000ull;
+        return u64(s64(s32(u32(cycles))));
+    }
+    // Every other register reads as 0, as under verification: Status with EIE
+    // clear reads "interrupts disabled", which the SDK's DI/EI pairs expect of
+    // a host that delivers interrupts itself.
+    const std::string name = kCop0Names[reg];
+    Note("cop0 " + name, "COP0: the game reads " + name + " ($" + std::to_string(reg) + "), answered 0");
+    return 0;
+}
+
+void StartCop0() {
+    g_count_from_ns = ClockNs();
+    lifted::read_cop0_hook = ReadCop0;
+}
 
 u64 ClockNs() {
     if (g_virtual_clock) return g_clock_ns;

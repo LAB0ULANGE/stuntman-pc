@@ -341,7 +341,10 @@ def statement(ins) -> str:
     if m == "syscall":
         return "lifted::Syscall(c);"
     if m == "mfc0":
-        return _set(rt, "0ull")
+        # Through the runtime: 0 under verification, as the interpreter reads
+        # it; a port's host answers (Count from its clock). "Read" in the name
+        # keeps the folding (liveness.fold) from moving it across a call.
+        return _set(rt, "lifted::ReadCop0(%du)" % ins.rd)
     raise Refused("no translation for %s at 0x%08X" % (m, ins.addr))
 
 

@@ -829,6 +829,25 @@ void StopIsWrittenUntilTheRunStops() {
           "a run that never stops is given up at the limit");
 }
 
+// COP0 for translated code (run.h): Count is the EE's cycles on the host's
+// clock since StartCop0 - the virtual clock here, so exact - sign-extended
+// like any mfc0; every other register reads as 0 (Stuntman's busy-wait on
+// Count at 0x001A3208 never ended with 0).
+void Cop0CountFollowsTheClock() {
+    ps2host::SetVirtualClock(true);
+    ps2host::StartCop0();
+    Check(lifted::ReadCop0(9) == 0, "Count starts at 0");
+    ps2host::AdvanceClock(1000000);                          // a millisecond
+    Check(lifted::ReadCop0(9) == 294912, "Count advances 294,912,000 a second");
+    ps2host::AdvanceClock(8000000000ull);                    // past 2^31 cycles
+    const u64 cycles = 2359296000ull + 294912;
+    Check(lifted::ReadCop0(9) == u64(s64(s32(u32(cycles)))), "Count is sign-extended, as mfc0 does");
+    Check(lifted::ReadCop0(12) == 0, "Status reads as 0");
+    lifted::read_cop0_hook = nullptr;
+    Check(lifted::ReadCop0(9) == 0, "without a host, Count reads as 0 (verification)");
+    ps2host::SetVirtualClock(false);
+}
+
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
 // listing the game's "open" reads sizes from, the answers it maps to errors.
 void MemoryCardKeepsSaves() {
@@ -1344,6 +1363,7 @@ int main() {
     MemoryCardKeepsSaves();
     IopImageGivesModuleReleases();
     StopIsWrittenUntilTheRunStops();
+    Cop0CountFollowsTheClock();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();

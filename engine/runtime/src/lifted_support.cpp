@@ -13,6 +13,7 @@
 namespace lifted {
 
 void (*loop_head_hook)(Context& c, u32 address) = nullptr;
+u64 (*read_cop0_hook)(u32 reg) = nullptr;
 
 void BudgetSpent(Context& c, u32 address) {
     if (loop_head_hook) loop_head_hook(c, address);

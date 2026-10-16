@@ -47,6 +47,7 @@ def lui(rt, imm): return i_type(0x0F, 0, rt, imm)
 def jal(target): return (3 << 26) | ((target >> 2) & 0x03FFFFFF)
 def mtc1(rt, fs): return (0x11 << 26) | (4 << 21) | (rt << 16) | (fs << 11)
 def mfc1(rt, fs): return (0x11 << 26) | (0 << 21) | (rt << 16) | (fs << 11)
+def mfc0(rt, rd): return (0x10 << 26) | (0 << 21) | (rt << 16) | (rd << 11)
 
 
 def mmi_word(name, rd, rs, rt, sa=None):
@@ -88,6 +89,11 @@ def programs():
         r_type(0x04, A2, A0, AT), r_type(0x17, A2, A1, T8),        # sllv, dsrav
         r_type(0x0A, A1, A0, A2), r_type(0x0B, A2, A1, A3),        # movz, movn
         JR_RA, r_type(0x27, A0, A1, T8),                            # nor (delay slot)
+    ])
+    add("cop0", [
+        mfc0(V0, 9), addiu(V0, V0, 1),                              # Count + 1
+        mfc0(V1, 12),                                               # Status
+        JR_RA, NOP,
     ])
     loop = at
     add("count_bits", [
@@ -302,6 +308,10 @@ class TestLift(unittest.TestCase):
     def test_loop(self):
         self.check("count_bits")
 
+    def test_cop0_reads_as_the_interpreter(self):
+        # No host hook under verification: Count and Status read as 0, as in emu.py.
+        self.check("cop0")
+
     def test_loads_and_stores(self):
         self.check("memory")
 
@@ -382,6 +392,13 @@ class TestStructured(TestLift):
 
 
 class TestLiftRefusals(unittest.TestCase):
+    def test_mfc0_reads_through_the_runtime(self):
+        # A port's host answers COP0 (Count from its clock): mfc0 is not a constant.
+        image = struct.pack("<3I", mfc0(V0, 9), JR_RA, NOP)
+        text = lift.lift_function(image, BASE, BASE, BASE + 12)
+        self.assertIn("lifted::ReadCop0(9u)", text)
+        self.assertNotIn("c.r[2] = 0ull;", text)
+
     def test_unsupported_instruction_is_refused(self):
         image = struct.pack("<3I", 0x42000002, JR_RA, NOP)      # tlbwi: no TLB on the host
         with self.assertRaises(lift.Refused):

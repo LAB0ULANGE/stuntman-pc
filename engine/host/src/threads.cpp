@@ -793,6 +793,7 @@ void RunThreads(const lifted::Context& initial, u32 entry, s64 loop_budget) {
     Scheduler& s = S();
     s.loop_budget = loop_budget;
     lifted::loop_head_hook = LoopHead;
+    StartCop0();
     s.virtual_time = VirtualClock();
     s.realtime = loop_budget == INT64_MAX && !s.virtual_time;
     if (s.realtime) StartRealTimeThreads();

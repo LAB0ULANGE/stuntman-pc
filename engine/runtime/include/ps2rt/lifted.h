@@ -63,6 +63,12 @@ void TailCall(Context& c, u32 target, u32 return_address, u32 entry_sp);
 /* A syscall: the host decides what the service does. */
 void Syscall(Context& c);
 
+/* mfc0: a system-control register, sign-extended. Without a hook it reads as 0,
+   as the interpreter (emu.py) reads it, so verification is unchanged; a host
+   sets `read_cop0_hook` to answer - Count from its clock. */
+extern u64 (*read_cop0_hook)(u32 reg);
+inline u64 ReadCop0(u32 reg) { return read_cop0_hook ? read_cop0_hook(reg) : 0; }
+
 /* A word result, sign-extended into its 64-bit register as the EE does. */
 inline u64 Sx32(u64 value) { return (u64)(s64)(s32)(u32)value; }
 
