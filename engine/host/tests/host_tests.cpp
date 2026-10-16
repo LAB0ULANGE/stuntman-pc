@@ -1386,6 +1386,22 @@ void IopPoolsAndLibraryCalls() {
     for (u32 i = 0; i <= std::strlen(minus); ++i) vm.Write(text + i, u8(minus[i]), 1);
     Check(call("sysclib", 38, {text, 0, 10}) == 0xFFFFFFFFu, "strtoul of -1 wraps, as C's");
     Check(call("cdvdman", 75, {1}) == 1, "sceCdMmode succeeds");
+
+    // CheckThreadStack: what is left of the caller's stack below $sp.
+    vm.threads[902].id = 902;
+    vm.threads[902].stack = 0x00180000u;
+    vm.threads[902].stack_size = 0x1000u;
+    vm.current = 902;
+    Context t;
+    t.r[29] = 0x00180C00u;
+    FindLibrary("thbase", 21)(vm, t);
+    Check(t.r[2] == 0xC00u, "CheckThreadStack: the bytes left below $sp");
+    vm.current = 0;
+    Context none;
+    FindLibrary("thbase", 21)(vm, none);
+    Check(s32(none.r[2]) == -100, "CheckThreadStack outside a thread: KE_ILLEGAL_CONTEXT");
+    vm.current = saved_current;
+    vm.threads.erase(902);
 }
 
 void IopInstructionsMatchTheR5900() {

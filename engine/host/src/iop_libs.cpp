@@ -130,6 +130,15 @@ Outcome GetThreadId(Vm& vm, Context& c) {
     return Ret(c, vm.in_interrupt ? u32(KE_ILLEGAL_CONTEXT) : vm.current);
 }
 
+// CheckThreadStack(): the bytes left on the calling thread's stack, from $sp
+// down to the stack's base.
+Outcome CheckThreadStack(Vm& vm, Context& c) {
+    const Thread* t = vm.in_interrupt ? nullptr : vm.Current();
+    if (!t) return Ret(c, u32(KE_ILLEGAL_CONTEXT));
+    const u32 sp = c.r[29];
+    return Ret(c, sp > t->stack ? sp - t->stack : 0);
+}
+
 Outcome ChangeThreadPriority(Vm& vm, Context& c) {
     u32 id = A(vm, c, 0);
     if (id == 0) id = vm.current;
@@ -1002,7 +1011,8 @@ const Map& Table() {
         {{"thbase", 8}, ExitThread}, {{"thbase", 10}, TerminateThread},
         {{"thbase", 11}, TerminateThread}, {{"thbase", 14}, ChangeThreadPriority},
         {{"thbase", 15}, ChangeThreadPriority}, {{"thbase", 16}, RotateThreadReadyQueue},
-        {{"thbase", 20}, GetThreadId}, {{"thbase", 24}, SleepThread},
+        {{"thbase", 20}, GetThreadId}, {{"thbase", 21}, CheckThreadStack},
+        {{"thbase", 24}, SleepThread},
         {{"thbase", 25}, WakeupThread}, {{"thbase", 26}, WakeupThread},
         {{"thbase", 27}, CancelWakeupThread}, {{"thbase", 28}, CancelWakeupThread},
         {{"thbase", 33}, DelayThread}, {{"thbase", 34}, GetSystemTime},
