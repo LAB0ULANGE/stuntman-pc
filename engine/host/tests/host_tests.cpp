@@ -849,17 +849,71 @@ void Cop0CountFollowsTheClock() {
 }
 
 // The EE sends a SIF command packet as the SDK does: the packet in EE memory,
-// one SifSetDma transfer naming it (run.h's SifDma).
-void SendSifPacket(std::vector<u32> words) {
+// one SifSetDma transfer naming it (run.h's SifDma) - after another with the
+// call's arguments, if any.
+void SendSifPacket(std::vector<u32> words, const std::vector<u32>& arguments = {}) {
     ps2host::Memory& m = ps2host::GuestMemory();
-    const u32 packet = 0x01E11000u, transfers = 0x01E10000u;
+    const u32 packet = 0x01E11000u, args = 0x01E12000u, transfers = 0x01E10000u;
     words[0] = u32(words.size() * 4);                        // the header's own size
     for (std::size_t i = 0; i < words.size(); ++i) m.Write(packet + u32(4 * i), words[i], 4);
-    m.Write(transfers, packet, 4);
-    m.Write(transfers + 4, 0, 4);
-    m.Write(transfers + 8, u32(words.size() * 4), 4);
-    m.Write(transfers + 12, 0, 4);
-    ps2host::SifDma(transfers, 1);
+    for (std::size_t i = 0; i < arguments.size(); ++i) m.Write(args + u32(4 * i), arguments[i], 4);
+    u32 t = transfers, count = 0;
+    auto transfer = [&](u32 src, u32 size, u32 dest) {
+        m.Write(t, src, 4);
+        m.Write(t + 4, dest, 4);
+        m.Write(t + 8, size, 4);
+        m.Write(t + 12, 0, 4);
+        t += 16;
+        ++count;
+    };
+    if (!arguments.empty()) transfer(args, u32(arguments.size() * 4), 0x00190000u);  // a host server's
+    transfer(packet, u32(words.size() * 4), 0);
+    ps2host::SifDma(transfers, count);
+}
+
+// Bind `sid` and return the server address the IOP answered with.
+u32 BindSifServer(u32 sid, u32 receive) {
+    std::vector<u32> bind(16, 0);
+    bind[2] = 0x80000009u;
+    bind[8] = sid;
+    SendSifPacket(bind);
+    ps2host::DeliverIopReply();
+    return u32(ps2host::GuestMemory().Read(receive + 36, 4));
+}
+
+// Call `procedure` of the server at `server` with `arguments`.
+void CallSifServer(u32 server, u32 procedure, const std::vector<u32>& arguments) {
+    std::vector<u32> call(16, 0);
+    call[2] = 0x8000000Au;
+    call[8] = procedure;
+    call[13] = server;
+    SendSifPacket(call, arguments);
+}
+
+// fileio's asynchronous requests (fileio.cpp): one with its semaphore negated
+// ends with the completion record where the library's initialisation said, and
+// command 0x80000011, after the RPC end; a synchronous one sends none.
+void FileIoCompletesAsynchronousRequests() {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 receive = 0x01E00000u, record = 0x01E03000u, result = 0x01E04000u;
+    ps2host::InstallFileIo();
+    const u32 server = BindSifServer(0x80000001u, receive);
+    CallSifServer(server, 0xFF, {record});
+    ps2host::DeliverIopReply();                              // its RPC end
+    m.Write(record + 4, 0xFFFFFFFFu, 4);
+    // read(descriptor 77, nowhere, 16 bytes), asynchronous: semaphore -5.
+    CallSifServer(server, 2, {u32(-5), result, 4, 77, 0, 16});
+    Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000008u, "the read's RPC end first");
+    Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000011u &&
+              m.Read(receive + 4, 4) == record && (m.Read(receive, 4) >> 8) == 0xA4u,
+          "then fileio's completion command, its record at the library's address");
+    Check(m.Read(record, 4) == u32(-5) && m.Read(record + 4, 4) == 2u && m.Read(record + 8, 4) == result &&
+              m.Read(record + 12, 4) == 4u && m.Read(record + 16, 4) == u32(-9) &&
+              m.Read(record + 0x14, 4) == 0u,
+          "the record: semaphore as sent, procedure, result's address and size, result, nothing unaligned");
+    CallSifServer(server, 2, {0, result, 4, 77, 0, 16});     // synchronous (no semaphore to signal)
+    Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000008u && !ps2host::DeliverIopReply(),
+          "a synchronous request: its RPC end only");
 }
 
 // SendCmdToEe (run.h): a host server's command to the EE - its data where it
@@ -877,17 +931,9 @@ void HostServersSendCommandsAfterTheirAnswer() {
     saddr[2] = 0x80000000u;
     saddr[4] = receive;
     SendSifPacket(saddr);
-    std::vector<u32> bind(16, 0);
-    bind[2] = 0x80000009u;
-    bind[8] = 0x7E570000u;
-    SendSifPacket(bind);
-    Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000008u, "the bind's RPC end");
-    const u32 server = u32(m.Read(receive + 36, 4));
-    std::vector<u32> call(16, 0);
-    call[2] = 0x8000000Au;
-    call[8] = 1;                                             // procedure
-    call[13] = server;
-    SendSifPacket(call);
+    const u32 server = BindSifServer(0x7E570000u, receive);
+    Check(m.Read(receive + 8, 4) == 0x80000008u, "the bind's RPC end");
+    CallSifServer(server, 1, {});
     Check(m.Read(dest, 4) == 0x04030201u && m.Read(dest + 4, 1) == 5u, "the command's data, where it said");
     Check(ps2host::DeliverIopReply() && m.Read(receive + 8, 4) == 0x80000008u &&
               m.Read(receive + 32, 4) == 0x8000000Au,
@@ -1416,6 +1462,7 @@ int main() {
     StopIsWrittenUntilTheRunStops();
     Cop0CountFollowsTheClock();
     HostServersSendCommandsAfterTheirAnswer();
+    FileIoCompletesAsynchronousRequests();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();

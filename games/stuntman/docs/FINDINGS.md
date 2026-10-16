@@ -52,3 +52,38 @@ The port answers Count as the EE's cycles since the run began, from the host's
 clock (`lifted::ReadCop0`, `engine/host/src/timers.cpp`); every other register
 reads as 0 and is noted. Verification keeps 0 everywhere, so verdicts mean what
 they meant. Listed with a scan of every word of `.text` and the copied runs.
+
+## Asynchronous file reads: completion by SIF command 0x80000011
+
+`0x001A3130` reads `STUNTMAN.IMG` asynchronously, then polls every 0x960000
+cycles with `0x001A32A8`, which asks `0x002610E8(fd, 1, &state)` - fio's wait
+for asynchronous I/O, mode 1 = no wait: PollSema on the semaphore whose id is
+at `0x00279E74`, then a scan of a 32-word table at `0x00279DE8` (-1 = free; an
+entry in use = a request in flight). The error path ("FileSystem: Disc error
+during asynchronous read, retrying...", `0x0028B370`) was never taken: the
+request simply never ended.
+
+**Diagnostic corrected:** there is no `end_func`. fio's `read` (`0x00260BB8`)
+calls `sceSifCallRpc(0x002AEBC0, 2, mode 0, request 0x002AD900 (0x20 bytes),
+receive 0x002AE540 (4), end_func 0, 0)`. Its request is `+0` semaphore, `+4`
+result address, `+8` 4, `+0x0C` IOP descriptor, `+0x10` buffer, `+0x14` size,
+`+0x1C` slot; on a descriptor opened "no wait" (flag 0x8000) it puts the
+semaphore id in the table and sends it negated. The end comes from the IOP's
+fileio: a completion record written at the EE address the library gave at its
+initialisation (procedure 0xFF's first word: `0x002AE580`), then **SIF command
+0x80000011**, whose handler fio installs in `0x002602E8` with
+`sceSifAddCmdHandler` (`0x0025E938`):
+- record `+0` semaphore: >= 0 - copy the result (`+0x0C` bytes from `+0x10`)
+  to `+0x08`, then `iSignalSema` (`0x0025C5D0`); < 0 - free the table entry
+  holding `-semaphore`;
+- record `+4` the procedure: a jump table at `0x00294CC0` copies per-procedure
+  data (2 = read: the unaligned head and tail, sizes at `+0x14`, data at
+  `+0x24`/`+0x64`, 0xA4 bytes in all; 11: 0x140 bytes; 12: 0x40; 23/25/26: up
+  to 0x400).
+
+**The handler starts at `0x0025FDD8`** (`lui $v0, 0x2B`), but the analysis
+starts the function at `0x0025FDDC`, one instruction late: `port.py
+--discover` translates it at its first call.
+
+The host now sends that record and command for every asynchronous fileio
+request (`engine/host/src/fileio.cpp`, `SendCmdToEe` in `iop.cpp`).
