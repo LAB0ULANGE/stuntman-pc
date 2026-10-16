@@ -247,6 +247,8 @@ std::map<u64, PadArea>& PadAreas() {
     return areas;
 }
 constexpr u8 kPadmanMode = 0x73;                // DualShock, analog: 3 halfwords after the header
+constexpr u8 kPadmanPressureMode = 0x79;        // DualShock 2 in pressure mode: 9 halfwords - the
+                                                // buttons, the sticks, then the 12 pressures
 
 std::vector<u8> Padman(u32 /*procedure*/, const std::vector<u8>& request) {
     std::vector<u8> answer(request.size() < 0x80 ? 0x80 : request.size(), 0);
@@ -322,15 +324,16 @@ void PadmanFrame() {
         if (std::getenv("PS2HOST_PAD_LOG") && (data[0] != 0xFF || data[1] != 0xFF))
             std::fprintf(stderr, "[pad] frame %llu port %u area 0x%08X frame# %u buttons %02X%02X\n",
                          (unsigned long long)g_frame, unsigned(p.port), unsigned(f), unsigned(p.frame), data[1], data[0]);
-        const u32 length = 2 + 2 * (kPadmanMode & 0xF);
+        const u8 mode = p.pressure ? kPadmanPressureMode : kPadmanMode;
+        const u32 length = 2 + 2 * (mode & 0xF);
         m.Write(f + 0, 0, 1);
-        m.Write(f + 1, kPadmanMode, 1);
+        m.Write(f + 1, mode, 1);
         for (u32 i = 0; i + 2 < length; ++i) m.Write(f + 2 + i, data[i], 1);
         m.Write(f + 0x60, length, 4);
         m.Write(f + 0x50, 4, 2);                         // digital,
         m.Write(f + 0x52, 7, 2);                         // DualShock
         m.Write(f + 0x64, 2, 1);
-        m.Write(f + 0x65, kPadmanMode, 1);
+        m.Write(f + 0x65, mode, 1);
         m.Write(f + 0x68, 2, 1);
         m.Write(f + 0x69, 1, 1);
         m.Write(f + 0x6A, 2, 1);

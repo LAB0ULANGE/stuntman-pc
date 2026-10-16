@@ -1108,6 +1108,19 @@ void PadmanSetActAlignIsDone() {
     ps2host::DeliverIopReply();
     Check(m.Read(answer + 0xC, 4) == 1 && m.Read(answer + 0x10, 4) == 1,
           "scePadEnterPressMode answered done at +0x10 (libpad 2.4)");
+    // In pressure mode the report is 0x79: buttons, sticks, then the 12
+    // pressures in libpad's order - right, left, up, down, triangle, circle,
+    // cross, square, L1, R1, L2, R2 - 0xFF for a button pressed.
+    ps2host::SetPadHook([]() -> u16 { return u16(1u << 14); });     // Cross
+    ps2host::DbcFrame();
+    ps2host::SetPadHook(nullptr);
+    const u32 g = m.Read(area + 0x58, 4) > m.Read(area + 0xD8, 4) ? area : area + 0x80;
+    bool pressures = true;
+    for (u32 i = 0; i < 12; ++i) pressures = pressures && m.Read(g + 8 + i, 1) == (i == 6 ? 0xFFu : 0u);
+    Check(m.Read(g + 1, 1) == 0x79 && m.Read(g + 0x60, 4) == 20 && m.Read(g + 2, 1) == 0xFF &&
+              m.Read(g + 3, 1) == 0xBF,
+          "in pressure mode: a 0x79 report of 20 bytes, Cross down");
+    Check(pressures, "its pressures in libpad's order: Cross alone, at 0xFF");
     std::vector<u32> close(0x20, 0);
     close[0] = 0x0E;                                         // scePadPortClose, port 0 slot 0
     SendSifPacket(call, close);
