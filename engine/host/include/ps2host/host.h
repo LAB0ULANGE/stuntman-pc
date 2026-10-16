@@ -92,6 +92,7 @@ struct Options {
     std::vector<u32> peek;         /* guest addresses whose 64 bytes the report shows */
     std::string dump_ram;          /* --dump-ram FILE: the EE's 32 MB of RAM, written as the run ends */
     std::vector<u32> watch_writes; /* guest addresses whose every store is logged */
+    std::vector<u32> watch_reads;  /* guest addresses whose every load is logged */
     std::string frames_dir;        /* write the displayed picture here as BMP files */
     int frames_every = 30;         /* ...every this many frames */
     long long frames_from = 0;     /* ...from this frame on (--frames-from) */

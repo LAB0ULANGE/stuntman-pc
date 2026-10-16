@@ -102,6 +102,9 @@ u64 Memory::Read(u32 address, u32 size) {
         if (read_hooks_[index]) value = read_hooks_[index](address, value);
     }
     if (status) Vif1Settled(address, u32(value));     // read with the queue run
+    if (!watched_reads_.empty())
+        for (u32 w : watched_reads_)
+            if (w >= address && w < address + size) Watched(address, value, size, "read", "->");
     return value;
 }
 
@@ -110,14 +113,23 @@ void Memory::WatchWrites(const std::vector<u32>& addresses) {
     generated::ram_watched = !addresses.empty();     // writes come here to be seen
 }
 
-void Memory::Watched(u32 address, u64 value, u32 size) {
+void Memory::WatchReads(const std::vector<u32>& addresses) {
+    watched_reads_.clear();
+    for (u32 a : addresses) watched_reads_.push_back(Physical(a));
+    // Loads come here to be seen: main RAM taken from the inline loads (and
+    // stores) while any read is watched - nothing added to them otherwise.
+    // The scratchpad's stay inline, unwatched.
+    generated::ram_base = watched_reads_.empty() ? rdram() : nullptr;
+}
+
+void Memory::Watched(u32 address, u64 value, u32 size, const char* what, const char* arrow) {
     const std::vector<u32>& calls = CurrentCalls();
     const u32 in = calls.empty() ? 0 : calls.back();
     // The callers too, innermost first: the function writing is often a helper.
     char chain[128] = "";
     for (std::size_t i = 1, n = 0; i < calls.size() && i <= 10; ++i)
         n += std::snprintf(chain + n, sizeof chain - n, " < %08X", unsigned(calls[calls.size() - 1 - i]));
-    std::fprintf(stderr, "[write] 0x%08X <- 0x%llX (%u bytes) in 0x%08X%s\n", unsigned(address),
+    std::fprintf(stderr, "[%s] 0x%08X %s 0x%llX (%u bytes) in 0x%08X%s\n", what, unsigned(address), arrow,
                  static_cast<unsigned long long>(value), unsigned(size), unsigned(in), chain);
 }
 

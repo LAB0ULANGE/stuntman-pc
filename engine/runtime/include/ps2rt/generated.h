@@ -44,7 +44,8 @@ namespace generated {
  * 0x20000000 and 0x30000000, and kseg0/kseg1 - and sends everything else (the
  * device registers, the scratchpad, an access running off the end) through the
  * port's functions above. `ram_watched` sends writes through them too, for a
- * port watching addresses.
+ * port watching addresses; a port watching reads takes `ram_base` away while
+ * it does, and every access goes through them, at no cost otherwise.
  */
 extern u8* ram_base;
 extern bool ram_watched;

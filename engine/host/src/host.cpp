@@ -571,6 +571,7 @@ int Run(const Options& options) {
     g_trace = options.trace_calls;
     g_all_notes = options.all_notes;
     GuestMemory().WatchWrites(options.watch_writes);
+    GuestMemory().WatchReads(options.watch_reads);
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
     SetCheckGuesses(options.check_guesses);
@@ -760,6 +761,8 @@ int Main(int argc, char** argv) {
             options.watch.push_back(u32(std::stoul(argv[++i], nullptr, 16)));
         else if (arg == "--watch-write" && i + 1 < argc)
             options.watch_writes.push_back(u32(std::stoul(argv[++i], nullptr, 16)));
+        else if (arg == "--watch-read" && i + 1 < argc)
+            options.watch_reads.push_back(u32(std::stoul(argv[++i], nullptr, 16)));
         else if (arg == "--dump-ram" && i + 1 < argc) options.dump_ram = argv[++i];
         else if (arg == "--peek" && i + 1 < argc)
             options.peek.push_back(u32(std::stoul(argv[++i], nullptr, 16)));

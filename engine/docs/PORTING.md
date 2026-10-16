@@ -76,6 +76,7 @@ Options for finding out why boot stops, passed after `run --`:
 | `--audio-wav FILE` | the same output recorded to a WAV file, for checking sound without listening |
 | `PS2HOST_AUDIO_LOG=1`, `PS2HOST_AUDIO_MUTE=1`, `PS2HOST_SPU_LOG=1`, `PS2HOST_SPU_NO_REVERB=1` | sound, looked into: every two seconds how the SPU2's samples came (the longest wait between batches) and what the device made of them (ran out, dropped, fewest buffers queued); the device played unheard; once a second the voices sounding, their volumes fixed or sweeping, the main volumes; the reverb left out |
 | `--watch-write ADDR` | every store to a guest address, with the function making it and four of its callers |
+| `--watch-read ADDR` | every load of a guest address, the same way: who reads a value (a controller's state, a flag waited on); main RAM is then reached through the memory functions rather than inline (the scratchpad stays inline, unwatched), at no cost without the option |
 | `--iop-trace` | every IOP library call the game's own modules make |
 | `--timeout S` | the time limit (30 s); `--budget N` makes a run deterministic |
 

@@ -65,6 +65,9 @@ public:
     /* Log every store that touches one of these guest addresses (--watch-write),
        with the value and the function storing it. */
     void WatchWrites(const std::vector<u32>& addresses);
+    /* Log every load that touches one of these guest addresses (--watch-read),
+       with the value and the function loading it. */
+    void WatchReads(const std::vector<u32>& addresses);
     /* Whether any store is being watched: if not, a store to main RAM or the
        scratchpad (no register hooks there) may go straight through Translate. */
     bool watching() const { return !watched_.empty(); }
@@ -74,7 +77,8 @@ private:
     std::vector<ReadHook> read_hooks_;      /* per register word, both windows */
     std::vector<WriteHook> write_hooks_;
     std::vector<u32> watched_;               /* physical addresses */
-    void Watched(u32 address, u64 value, u32 size);
+    std::vector<u32> watched_reads_;
+    void Watched(u32 address, u64 value, u32 size, const char* what = "write", const char* arrow = "<-");
 };
 
 /* The one guest address space; the generated Read/Write hooks use it. */

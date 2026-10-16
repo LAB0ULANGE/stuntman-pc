@@ -10,6 +10,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <io.h>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -319,6 +321,39 @@ void DmaStallsAndGoesOn() {
     Check(out.stalled && e.end_pending && e.qwc == 1 && out.leftover_count == 1, "stalled in an end tag");
     out = ps2host::SendDmaBlocksUntil(e, sink);
     Check(out.ended && !out.stalled && e.qwc == 0 && !e.end_pending, "its data sent, the chain has ended");
+}
+
+// --watch-read (memory.h): a load of a watched address - inline main-RAM loads
+// included - is logged with its value, others not; the right value either way.
+void WatchedReadsAreLogged() {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 watched = 0x00240010u;
+    m.Write(watched, 0x12345678u, 4);
+    m.Write(watched + 16, 0x9ABCDEF0u, 4);
+    const std::filesystem::path log = std::filesystem::temp_directory_path() / "ps2host_tests_watch_read.txt";
+    std::fflush(stderr);
+    const int saved = _dup(_fileno(stderr));
+    FILE* to = std::fopen(log.u8string().c_str(), "w");
+    _dup2(_fileno(to), _fileno(stderr));
+    m.WatchReads({watched});
+    const bool slow = generated::ram_base == nullptr;
+    const u64 seen = generated::ReadU32(watched), other = generated::ReadU32(watched + 16);
+    std::fflush(stderr);
+    _dup2(saved, _fileno(stderr));
+    _close(saved);
+    std::fclose(to);
+    m.WatchReads({});
+    std::string text;
+    {
+        std::ifstream in(log);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    std::filesystem::remove(log);
+    Check(slow && generated::ram_base == m.rdram(), "watching a read sends loads the slow way, and only then");
+    Check(seen == 0x12345678u && other == 0x9ABCDEF0u, "watched or not, a load reads its value");
+    Check(text.find("[read] 0x00240010 -> 0x12345678") != std::string::npos &&
+              text.find("0x00240020") == std::string::npos,
+          "the watched load is logged, the other not");
 }
 
 // Every format's layout maps a page's pixels onto distinct bytes (nibbles).
@@ -1685,6 +1720,7 @@ int main() {
     DmaChainsAreWalked();
     VifInterruptBitStopsAfterItsCommand();
     DmaStallsAndGoesOn();
+    WatchedReadsAreLogged();
     GsLayoutsArePermutations();
     GsDrawsASprite();
     GsFogsTowardsFogcol();
