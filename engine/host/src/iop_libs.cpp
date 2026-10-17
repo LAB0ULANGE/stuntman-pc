@@ -791,6 +791,18 @@ Outcome CdRead(Vm& vm, Context& c) {
     return Ret(c, 1);
 }
 
+// sceCdTrayReq(mode, u32* traycnt): 2 (SCECdTrayCheck) asks whether the tray
+// moved since last asked - never, the image stays in: 0 in *traycnt. 0 and 1
+// (open, close) are noted and done as if (the image stays in all the same).
+// 1: done.
+Outcome CdTrayReq(Vm& vm, Context& c) {
+    const u32 mode = A(vm, c, 0), traycnt = A(vm, c, 1);
+    if (mode < 2) Note("cdvdman tray " + std::to_string(mode), std::string("IOP: sceCdTrayReq asks the tray to ") +
+                       (mode ? "close" : "open") + "; the disc image stays in");
+    if (traycnt) vm.Write(traycnt, 0, 4);
+    return Ret(c, 1);
+}
+
 // sceCdCallback(function): the function called as each command ends; gives
 // the one set before.
 Outcome CdCallback(Vm& vm, Context& c) {
@@ -1090,7 +1102,7 @@ const Map& Table() {
         {{"sifman", 32}, SetDmaIntr},
         {{"cdvdman", 4}, Succeed}, {{"cdvdman", 6}, CdRead}, {{"cdvdman", 8}, CdGetError},
         {{"cdvdman", 10}, CdSearchFile}, {{"cdvdman", 11}, CdSync}, {{"cdvdman", 12}, CdGetDiskType}, {{"cdvdman", 13}, CdDiskReady},
-        {{"cdvdman", 75}, CdMmode}, {{"cdvdman", 37}, CdCallback},
+        {{"cdvdman", 75}, CdMmode}, {{"cdvdman", 37}, CdCallback}, {{"cdvdman", 14}, CdTrayReq},
         {{"thfpool", 4}, CreateFpl}, {{"thfpool", 5}, DeleteFpl}, {{"thfpool", 6}, AllocateFpl},
         {{"thfpool", 7}, PollAllocateFpl}, {{"thfpool", 8}, PollAllocateFpl}, {{"thfpool", 9}, FreeFpl},
         {{"loadcore", 5}, FlushDcache},

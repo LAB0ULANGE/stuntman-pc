@@ -1641,6 +1641,8 @@ void IopSearchesTheDisc() {
     CdInterrupts(vm);
     Check(vm.Read(seen, 4) == 0, "once a read");
     Check(call(37, {0}) == handler, "sceCdCallback(0) gives it back and removes it");
+    vm.Write(seen, 0xFFFFFFFFu, 4);
+    Check(call(14, {2, seen}) == 1 && vm.Read(seen, 4) == 0, "sceCdTrayReq: the tray never moved");
     ps2host::GuestDisc().Use({});
 }
 
