@@ -255,6 +255,9 @@ public:
        drew: by their bounding rectangles (false), or (true, the default) only
        where their triangles share a pixel - their interiors meeting. */
     virtual void SetExactOverlap(bool exact) { (void)exact; }
+    /* The exact test by axes worked out once a triangle (true, the default)
+       or for each pair. */
+    virtual void SetPreparedAxes(bool on) { (void)on; }
     /* The destination alpha test's setup pass over the batch's rectangle
        (true, the default) or over the whole target. */
     virtual void SetDateArea(bool batch) { (void)batch; }
@@ -343,6 +346,9 @@ std::string GpuProfileReport();
    interiors meet (a shared edge or corner does not; nor does a triangle with
    no area). The exact overlap test's (SetExactOverlap). */
 bool TrianglesShareAPixel(const float a[6], const float b[6]);
+/* The same, and whether the test by prepared axes (the batches' own) gives
+   the direct test's answer. */
+bool TrianglesShareAPixelBothWays(const float a[6], const float b[6], bool* agree);
 
 }  // namespace ps2gpu
 

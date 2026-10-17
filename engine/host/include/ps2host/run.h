@@ -221,8 +221,9 @@ bool GpuPrimary();
    and any CLUT the cache would have kept that came out different said). */
 void SetTextureCache(const std::string& mode);
 /* How a batch in two passes (or blended in the shader) decides a primitive
-   overlaps what it drew: "exact" (triangles sharing a pixel) or "bbox" (the
-   bounding rectangles, as before). */
+   overlaps what it drew: "exact" (triangles sharing a pixel), "exact-direct"
+   (the same, each pair's axes worked out anew, as before) or "bbox" (the
+   bounding rectangles). */
 void SetBatchOverlap(const std::string& mode);
 /* The GPU images newer than local memory kept in a list (the "newer_list"
    setting, on by default; --newer-list on|off), not looked for among all. */

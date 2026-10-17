@@ -318,7 +318,27 @@ const char* BreakReason(const GsDrawState& x, const GsDrawState& y) {
 struct BatchTriangle {
     double x[3], y[3];
     int x0, y0, x1, y1;                 // its bounding pixels, inclusive
+    // Worked out once (Prepare): its edges' normals, its own extent along
+    // each, and whether it has no area.
+    double nx[3], ny[3], lo[3], hi[3];
+    bool flat;
 };
+
+void Prepare(BatchTriangle& t) {
+    t.flat = (t.x[1] - t.x[0]) * (t.y[2] - t.y[0]) - (t.x[2] - t.x[0]) * (t.y[1] - t.y[0]) == 0.0;
+    for (int e = 0; e < 3; ++e) {
+        t.nx[e] = -(t.y[(e + 1) % 3] - t.y[e]);
+        t.ny[e] = t.x[(e + 1) % 3] - t.x[e];
+        double lo = 1e300, hi = -1e300;
+        for (int i = 0; i < 3; ++i) {
+            const double p = t.nx[e] * t.x[i] + t.ny[e] * t.y[i];
+            lo = std::min(lo, p);
+            hi = std::max(hi, p);
+        }
+        t.lo[e] = lo;
+        t.hi[e] = hi;
+    }
+}
 
 /* Whether two triangles' interiors meet: no axis among their six edges'
    normals separates them (a shared edge, or a corner, is not meeting - the
@@ -343,6 +363,25 @@ bool InteriorsMeet(const BatchTriangle& a, const BatchTriangle& b) {
             if (a1 <= b0 || b1 <= a0) return false;
         }
     return true;
+}
+
+/* The same, by the triangles' prepared axes and extents (Prepare): the same
+   products, so the same answer - each extent once, not once a pair. */
+bool InteriorsMeetPrepared(const BatchTriangle& a, const BatchTriangle& b) {
+    if (a.flat || b.flat) return false;
+    const auto separated = [](const BatchTriangle& t, const BatchTriangle& other) {
+        for (int e = 0; e < 3; ++e) {
+            double lo = 1e300, hi = -1e300;
+            for (int i = 0; i < 3; ++i) {
+                const double p = t.nx[e] * other.x[i] + t.ny[e] * other.y[i];
+                lo = std::min(lo, p);
+                hi = std::max(hi, p);
+            }
+            if (t.hi[e] <= lo || hi <= t.lo[e]) return true;
+        }
+        return false;
+    };
+    return !separated(a, b) && !separated(b, a);
 }
 
 std::map<std::string, std::uint64_t> g_breaks;
@@ -419,6 +458,7 @@ public:
     void ClutRows(const std::uint32_t* clut, std::uint32_t rows) override;
     bool ReadClut(std::uint32_t* clut) override;
     void SetExactOverlap(bool exact) override { exact_overlap_ = exact; }
+    void SetPreparedAxes(bool on) override { prepared_axes_ = on; }
     void SetDateArea(bool batch) override { date_batch_area_ = batch; }
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                     std::uint32_t* width, std::uint32_t* height) override;
@@ -479,6 +519,7 @@ private:
        grid of 32-pixel cells listing those over each. */
     static constexpr int kCellShift = 5, kCells = 64;
     bool exact_overlap_ = true;
+    bool prepared_axes_ = true;         // SetExactOverlap: "exact" (prepared) or "exact-direct"
     std::vector<BatchTriangle> batch_tris_;
     std::vector<std::vector<std::uint32_t>> batch_cells_ = std::vector<std::vector<std::uint32_t>>(kCells * kCells);
     std::vector<std::uint32_t> used_cells_;
@@ -504,6 +545,7 @@ private:
         t.y0 = int(std::floor(y0));
         t.x1 = int(std::ceil(x1));
         t.y1 = int(std::ceil(y1));
+        Prepare(t);
         return t;
     }
     /* Whether a triangle of these meets one the batch drew. */
@@ -516,7 +558,7 @@ private:
                 for (std::uint32_t other : batch_cells_[cell]) {
                     const BatchTriangle& o = batch_tris_[other];
                     if (o.x1 < t.x0 || t.x1 < o.x0 || o.y1 < t.y0 || t.y1 < o.y0) continue;
-                    if (InteriorsMeet(t, o)) {
+                    if (prepared_axes_ ? InteriorsMeetPrepared(t, o) : InteriorsMeet(t, o)) {
                         meets = true;
                         return;
                     }
@@ -3109,7 +3151,25 @@ bool TrianglesShareAPixel(const float a[6], const float b[6]) {
         y.x[i] = b[2 * i];
         y.y[i] = b[2 * i + 1];
     }
-    return InteriorsMeet(x, y);
+    Prepare(x);
+    Prepare(y);
+    const bool direct = InteriorsMeet(x, y), prepared = InteriorsMeetPrepared(x, y);
+    return direct == prepared ? direct : !direct;   // (a disagreement fails its test either way)
+}
+
+bool TrianglesShareAPixelBothWays(const float a[6], const float b[6], bool* agree) {
+    BatchTriangle x{}, y{};
+    for (int i = 0; i < 3; ++i) {
+        x.x[i] = a[2 * i];
+        x.y[i] = a[2 * i + 1];
+        y.x[i] = b[2 * i];
+        y.y[i] = b[2 * i + 1];
+    }
+    Prepare(x);
+    Prepare(y);
+    const bool direct = InteriorsMeet(x, y);
+    *agree = direct == InteriorsMeetPrepared(x, y) && direct == InteriorsMeetPrepared(y, x);
+    return direct;
 }
 
 }  // namespace ps2gpu

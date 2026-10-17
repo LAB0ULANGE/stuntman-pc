@@ -1929,6 +1929,7 @@ void SetNewerList(bool on) {
 void SetBatchOverlap(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->renderer->SetExactOverlap(mode != "bbox");
+    g_bridge->renderer->SetPreparedAxes(mode != "exact-direct");
     if (mode == "bbox") std::fprintf(stderr, "[gpu] batch overlap: bounding rectangles\n");
 }
 

@@ -851,6 +851,24 @@ void GpuTrianglesShareAPixelExactly() {
     Check(!ps2gpu::TrianglesShareAPixel(a, corner) && !ps2gpu::TrianglesShareAPixel(a, flat) &&
               !ps2gpu::TrianglesShareAPixel(a, apart),
           "GPU batches: a corner, a triangle with no area, one apart: nothing shared");
+    // The batches' test (axes prepared once a triangle) answers as the direct
+    // one: random triangles on a small grid (shared edges and corners often),
+    // and at half pixels.
+    u32 seed = 12345;
+    bool agree = true;
+    int met = 0;
+    for (int i = 0; i < 200000 && agree; ++i) {
+        float t[2][6];
+        for (auto& tri : t)
+            for (float& c : tri) {
+                seed = seed * 1664525u + 1013904223u;
+                c = float((seed >> 16) % 9) * ((seed & 1) ? 0.5f : 1.0f);
+            }
+        bool same = false;
+        met += ps2gpu::TrianglesShareAPixelBothWays(t[0], t[1], &same);
+        agree = agree && same;
+    }
+    Check(agree && met > 1000, "GPU batches: the test by prepared axes answers as the direct test");
 }
 
 void GpuDecodesTexturesAsTheGs() {
