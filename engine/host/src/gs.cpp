@@ -562,6 +562,26 @@ bool Gs::Picture(std::vector<u32>* pixels, u32* width, u32* height) const {
     if (!fbw) return false;
     const u32 lines = ShownLines(), repeat = h / std::max(lines, 1u);
     Touch(fbp, fbw, psm, dbx, dby, w, lines, false);
+    if (weave && repeat == 2 && lines * 2 == h) {
+        // The field on its lines, the one before on the others (a new size:
+        // this one on both, until the next comes).
+        const bool fresh = woven_width_ != w || woven_height_ != h;
+        if (fresh) woven_.assign(std::size_t(w) * h, 0);
+        woven_width_ = w;
+        woven_height_ = h;
+        for (u32 y = 0; y < lines; ++y)
+            for (u32 x = 0; x < w; ++x) {
+                u32 c = memory.Read(fbp, fbw, dbx + x, dby + y, psm);
+                if (psm == PSMCT16 || psm == PSMCT16S) c = From16(c, 0);
+                const u32 bgra = (c & 0xFF00FF00u) | ((c & 0xFF) << 16) | ((c >> 16) & 0xFF);
+                woven_[std::size_t(2 * y + (weave_parity & 1)) * w + x] = bgra;
+                if (fresh) woven_[std::size_t(2 * y + 1 - (weave_parity & 1)) * w + x] = bgra;
+            }
+        *pixels = woven_;
+        *width = w;
+        *height = h;
+        return true;
+    }
     pixels->assign(std::size_t(w) * h, 0);
     for (u32 y = 0; y < h; ++y)
         for (u32 x = 0; x < w; ++x) {

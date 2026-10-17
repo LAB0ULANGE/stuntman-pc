@@ -622,6 +622,15 @@ int Run(const Options& options) {
         else StartSampler();
     }
     if (!options.vu_record.empty()) Vu::RecordPrograms(options.vu_record);
+    {
+        // Played (a window, real time), the setting, weave by default; a
+        // scripted run's pictures stay each field alone unless asked.
+        const bool played = options.window && !options.virtual_time;
+        const std::string mode = !options.deinterlace.empty() ? options.deinterlace
+                                 : played                      ? Setting("deinterlace", "weave")
+                                                               : "off";
+        gs::TheGs().weave = mode == "weave";
+    }
     if (!options.memcard.empty()) mc2::SetCardDirectory(options.memcard);
     if (options.vu_interpret) Vu1().use_compiled = Vu0().use_compiled = false;
     Vu1().fast = options.vu_fast;
@@ -738,6 +747,7 @@ int Main(int argc, char** argv) {
         }
         else if (arg == "--vu-record" && i + 1 < argc) options.vu_record = argv[++i];
         else if (arg == "--vu-interpret") options.vu_interpret = true;
+        else if (arg == "--deinterlace" && i + 1 < argc) options.deinterlace = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;

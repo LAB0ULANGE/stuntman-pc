@@ -618,6 +618,13 @@ void FrameDone(u64 frame) {
     }
     const bool dump = !g_frames_dir.empty() && g_frames_written < g_frames_limit && frame >= g_frames_from &&
                       frame % u64(g_frames_every) == 0;
+    // Woven, a picture is this field and the one before: that one read too,
+    // a frame ahead of the dump (Gs::Picture keeps it). A field is on the
+    // lines of the parity the game drew it for - CSR.FIELD as it read it,
+    // the frame before's.
+    gs::TheGs().weave_parity = u32(frame + 1) & 1;
+    const bool stash = gs::TheGs().weave && !dump && !g_frames_dir.empty() && g_frames_written < g_frames_limit &&
+                       frame + 1 >= g_frames_from && (frame + 1) % u64(g_frames_every) == 0;
     // Nothing here reads the GS this frame (no picture to the CPU, no dump,
     // no trace): the GS thread ends the frame itself where the frame's
     // packets end - the GPU's frame, the window's picture - and the EE goes
@@ -627,8 +634,8 @@ void FrameDone(u64 frame) {
     if ((long long)frame == capture_at) g_capture_request = true;
     if (g_capture_request.exchange(false) && g_capture_frame < 0 && GpuPrimary()) StartCapture(frame);
     const bool capturing = g_capture_frame >= 0 && (long long)frame == g_capture_frame;
-    const bool cpu_reads_gs = dump || (g_dump_frame >= 0 && (long long)frame == g_dump_frame) || g_trace_frame >= 0 ||
-                              capturing;
+    const bool cpu_reads_gs = dump || stash || (g_dump_frame >= 0 && (long long)frame == g_dump_frame) ||
+                              g_trace_frame >= 0 || capturing;
     if (!cpu_reads_gs && GsFrame(frame)) {
         DbcFrame();
         if (!PumpWindow()) throw GuestExit{0};          // the user closed the window
@@ -663,6 +670,11 @@ void FrameDone(u64 frame) {
     PresentFrame();
     if (WindowClosed()) throw GuestExit{0};             // the user closed the window
     GpuShadowFrame(frame, dump ? g_frames_dir : std::string());
+    if (stash) {
+        std::vector<u32> field;
+        u32 w = 0, h = 0;
+        gs::TheGs().Picture(&field, &w, &h);
+    }
     if (!dump) return;
     char name[64];
     std::snprintf(name, sizeof name, "/frame_%06llu.bmp", static_cast<unsigned long long>(frame));

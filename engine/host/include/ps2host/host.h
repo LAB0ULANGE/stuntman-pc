@@ -111,6 +111,11 @@ struct Options {
     bool check_guesses = false;    /* --check-guesses: GIF_STAT guesses checked (virtual time) */
     bool vif1_sync = false;        /* --vif1-sync: VIF1 on the EE's thread in real time too */
     std::string vu_record;         /* --vu-record: the microprograms run, for vurecomp.py */
+    /* --deinterlace weave|off: field mode's pictures, both fields woven as a
+       television shows them, or each alone, its lines doubled. Played (a
+       window in real time), the "deinterlace" setting's, weave by default;
+       else off. */
+    std::string deinterlace;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
     bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */
     bool gpu = false;              /* draw on the GPU instead of the software GS (gpu_bridge.cpp) */

@@ -138,8 +138,14 @@ public:
 
     /* The displayed picture, 32-bit BGRA, and its size. False if nothing is.
        In field mode (SMODE2 INT and FFMD) each field shows every line of the
-       frame buffer, half the display's height: those lines, each twice. */
+       frame buffer, half the display's height: those lines, each twice - or,
+       with `weave`, on the lines of `weave_parity` (0 the even ones) of the
+       picture, the field before on the others, as a television interlaces
+       them: a game drawing each field half a line apart (Stuntman) shows its
+       full height, still. */
     bool Picture(std::vector<u32>* pixels, u32* width, u32* height) const;
+    bool weave = false;
+    u32 weave_parity = 0;
     /* How many lines of the frame buffer the display shows. */
     u32 ShownLines() const;
     bool WriteBmp(const std::string& path) const;
@@ -292,6 +298,8 @@ private:
     u32 cbp0_ = 0, cbp1_ = 0;                       // CLUT bases CLD compares with
     // Privileged.
     u64 pmode_ = 0, smode2_ = 0, dispfb_[2] = {}, display_[2] = {}, bgcolor_ = 0;
+    mutable std::vector<u32> woven_;            // Picture's, with `weave`: both fields
+    mutable u32 woven_width_ = 0, woven_height_ = 0;
     u64 primitives_ = 0, uploads_ = 0;
     std::atomic<u64> pixels_{0};               // written by the row workers too
     u64 tags_[4] = {}, image_qwords_ = 0;

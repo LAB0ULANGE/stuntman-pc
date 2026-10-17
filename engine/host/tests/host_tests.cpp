@@ -470,6 +470,41 @@ void GsDrawsASprite() {
     Check(gs.primitives() == 1 && gs.pixels_drawn() == 8, "one sprite of 4x2 pixels");
 }
 
+// Field mode (SMODE2 INT and FFMD) shows a 256-line field for a 512-line
+// picture: alone, each line twice; woven, on the lines of its parity, the
+// field before on the others - as a television interlaces them.
+void GsWeavesFieldsAsATelevision() {
+    using namespace ps2host::gs;
+    Gs gs;
+    gs.SetPrivileged(0x12000000u, 2);                       // PMODE: read circuit 2
+    gs.SetPrivileged(0x12000020u, 3);                       // SMODE2: interlaced, field mode
+    gs.SetPrivileged(0x12000090u, 10u << 9);                // DISPFB2: FBP 0, 640 wide, PSMCT32
+    gs.SetPrivileged(0x120000A0u, 0x1FF9FF01848290ull);     // DISPLAY2: 2560 / 4 x 512 (Stuntman's)
+    // A field's mark in alpha, its line in green: the bytes Picture's RGBA to
+    // BGRA leaves where they are.
+    auto field = [&](u32 mark) {
+        for (u32 y = 0; y < 256; ++y) gs.memory.Write(0, 10, 7, y, PSMCT32, mark << 24 | y << 8);
+    };
+    auto at = [](const std::vector<u32>& p, u32 y) { return p[std::size_t(y) * 640 + 7] & 0xFF00FF00u; };
+    auto is = [](u32 mark, u32 line) { return mark << 24 | line << 8; };
+    std::vector<u32> alone, first, second;
+    u32 w = 0, h = 0;
+    field(1);
+    gs.Picture(&alone, &w, &h);
+    const bool doubled = w == 640 && h == 512 && at(alone, 10) == is(1, 5) && at(alone, 11) == is(1, 5);
+    gs.weave = true;
+    gs.weave_parity = 0;
+    gs.Picture(&first, &w, &h);                             // a new size: this field on both
+    field(2);
+    gs.weave_parity = 1;
+    gs.Picture(&second, &w, &h);
+    Check(doubled, "GS: a field alone, each line twice");
+    Check(at(first, 10) == is(1, 5) && at(first, 11) == is(1, 5), "GS: woven, the first field fills both lines");
+    Check(at(second, 10) == is(1, 5) && at(second, 11) == is(2, 5) && at(second, 0) == is(1, 0) &&
+              at(second, 1) == is(2, 0),
+          "GS: woven, a field on its parity's lines, the one before on the others");
+}
+
 // PATH3 held by MSKPATH3: an unmask lets one EOP-ended group of packets go,
 // as Burnout 3's texture uploads need (one group per window, five a picture).
 void GsLoadsACsm2Clut() {
@@ -2133,6 +2168,7 @@ int main() {
     CodePatchesAreFound();
     GsLayoutsArePermutations();
     GsDrawsASprite();
+    GsWeavesFieldsAsATelevision();
     GsFogsTowardsFogcol();
     GsLoadsACsm2Clut();
     Path3GoesOneGroupPerWindow();
