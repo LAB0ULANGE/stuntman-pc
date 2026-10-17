@@ -356,6 +356,45 @@ void WatchedReadsAreLogged() {
           "the watched load is logged, the other not");
 }
 
+// A program patching its own code: each word changed found once, with the
+// function that stored it while stores into the code are watched (up to the
+// first frame), and without it after - when stores go the fast way again.
+void CodePatchesAreFound() {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 code = 0x00230000u;
+    const u32 words[4] = {0x0C094804u, 0, 0x080944FCu, 0};
+    for (u32 i = 0; i < 4; ++i) m.Write(code + 4 * i, words[i], 4);
+    ps2host::KeepCode(code, reinterpret_cast<const u8*>(words), sizeof words);
+    const bool slow = generated::ram_watched;
+    std::vector<u32>& calls = ps2host::CurrentCalls();
+    calls.push_back(0x00102860u);
+    calls.push_back(0x001027A8u);
+    generated::Write32(code, 0x0C040A04u);
+    calls.pop_back();
+    calls.pop_back();
+    const std::vector<std::string> first = ps2host::CheckCode();
+    const bool once = ps2host::CheckCode().empty();
+    ps2host::CodeFrame(1);
+    const bool fast = !generated::ram_watched;
+    generated::Write32(code + 8, 0x08040A0Eu);
+    const std::vector<std::string> later = ps2host::CheckCode();
+    const std::string report = ps2host::CodeReport();
+    ps2host::ForgetCode();
+    for (u32 i = 0; i < 4; ++i) m.Write(code + 4 * i, 0, 4);
+    Check(slow && fast, "stores into the code go the slow way until the first frame, and only then");
+    Check(first.size() == 1 &&
+              first[0].find("0x00230000: 0C094804 -> 0C040A04 (jal 0x00252010 -> jal 0x00102810)") !=
+                  std::string::npos &&
+              first[0].find("stored by 0x001027A8") != std::string::npos &&
+              first[0].find("< 0x00102860") != std::string::npos && once,
+          "a patched word is found once, with the function that stored it and its caller");
+    Check(later.size() == 1 && later[0].find("(j 0x002513F0 -> j 0x00102838)") != std::string::npos &&
+              later[0].find("after the first frame (--watch-write 0x00230008") != std::string::npos,
+          "one patched later is found too, the way to its writer named");
+    Check(report.find("0x00230000") != std::string::npos && report.find("0x00230008") != std::string::npos,
+          "the report lists every word changed");
+}
+
 // Every format's layout maps a page's pixels onto distinct bytes (nibbles).
 void GsLayoutsArePermutations() {
     using namespace ps2host::gs;
@@ -1744,6 +1783,7 @@ int main() {
     VifInterruptBitStopsAfterItsCommand();
     DmaStallsAndGoesOn();
     WatchedReadsAreLogged();
+    CodePatchesAreFound();
     GsLayoutsArePermutations();
     GsDrawsASprite();
     GsFogsTowardsFogcol();

@@ -594,6 +594,7 @@ void FinishCapture(u64 frame) {
 void RequestCapture() { g_capture_request = true; }
 
 void FrameDone(u64 frame) {
+    CodeFrame(frame);
     FrameTimes(frame);
     timeline::Frame(frame);
     SampleFrame(frame);

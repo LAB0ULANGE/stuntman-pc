@@ -17,6 +17,7 @@ target_compile_features(ps2rt PUBLIC cxx_std_17)
 add_library(ps2host STATIC
     ${CMAKE_CURRENT_LIST_DIR}/src/host.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/memory.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/code.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/kernel.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/devices.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ipu.cpp

@@ -110,7 +110,18 @@ u64 Memory::Read(u32 address, u32 size) {
 
 void Memory::WatchWrites(const std::vector<u32>& addresses) {
     watched_ = addresses;
-    generated::ram_watched = !addresses.empty();     // writes come here to be seen
+    generated::ram_watched = watching();     // writes come here to be seen
+}
+
+void Memory::WatchCode(u32 start, u32 end) {
+    code_start_ = Physical(start);
+    code_end_ = end > start ? code_start_ + (end - start) : code_start_;
+    generated::ram_watched = watching();
+}
+
+std::pair<u32, u32> Memory::CodeWriter(u32 address) const {
+    auto found = code_writers_.find(Physical(address) & ~3u);
+    return found == code_writers_.end() ? std::pair<u32, u32>{0, 0} : found->second;
 }
 
 void Memory::WatchReads(const std::vector<u32>& addresses) {
@@ -146,6 +157,12 @@ void Memory::Write(u32 address, u64 value, u32 size) {
     if (!watched_.empty())
         for (u32 w : watched_)
             if (w >= address && w < address + size) Watched(address, value, size);
+    if (address + size > code_start_ && address < code_end_) {
+        const std::vector<u32>& calls = CurrentCalls();
+        const std::pair<u32, u32> writer{calls.empty() ? 0 : calls.back(),
+                                         calls.size() < 2 ? 0 : calls[calls.size() - 2]};
+        for (u32 word = address & ~3u; word < address + size; word += 4) code_writers_[word] = writer;
+    }
     u8* bytes = Translate(address, size);
     if (!bytes) throw MemoryFault{address, true};
     if (address >= kBiosBase && address - kBiosBase < kBiosSize) return;   // ROM

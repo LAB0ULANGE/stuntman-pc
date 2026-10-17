@@ -382,6 +382,17 @@ u32 LoadElf(const std::string& path, std::vector<u8> data) {
             g_image_end = vaddr + filesz;
         }
     }
+    // The sections holding instructions (SHF_ALLOC | SHF_EXECINSTR), as loaded:
+    // a game that patches them is found out (code.cpp).
+    const u32 shoff = u32at(32);
+    const u16 shentsize = u16at(46), shnum = u16at(48);
+    for (u16 i = 0; shoff && i < shnum; ++i) {
+        const std::size_t sh = shoff + std::size_t(i) * shentsize;
+        const u32 type = u32at(sh + 4), flags = u32at(sh + 8), addr = u32at(sh + 12);
+        const u32 offset = u32at(sh + 16), size = u32at(sh + 20);
+        if (type != 1 || (flags & 6u) != 6u || !size || std::size_t(offset) + size > data.size()) continue;
+        if (memory.Translate(addr, size)) KeepCode(addr, data.data() + offset, size);
+    }
     return entry;
 }
 
@@ -440,6 +451,8 @@ void Report(const Options& options, const std::string& outcome) {
         }
         std::printf("\n");
     }
+    const std::string code = CodeReport();
+    if (!code.empty()) std::printf("code changed by the program (not followed by the translation):\n%s", code.c_str());
     std::printf("VIF1 commands:%s\n", Vif1().Summary().c_str());
     // Whether the game goes through VIF1's interrupt-bit stalls at all.
     std::printf("VIF1: %llu interrupt stalls\n", static_cast<unsigned long long>(Vif1InterruptStalls()));

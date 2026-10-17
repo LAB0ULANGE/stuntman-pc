@@ -66,6 +66,18 @@ void Note(const std::string& key, const std::string& text);
 /* Whether a Note under `key` would be logged (so its text is worth making). */
 bool Noting(const std::string& key);
 
+/* The program's code (code.cpp), which a game may patch while the translated
+   code stays the executable's. KeepCode keeps an executable section as loaded
+   (and watches stores into the code until the first frame, to name who makes
+   them); CheckCode lists the words changed since, each once a value;
+   CodeFrame checks at the first frame and stops watching; CodeReport lists
+   every word changed now, for the report; ForgetCode drops it all. */
+void KeepCode(u32 address, const u8* bytes, u32 size);
+std::vector<std::string> CheckCode();
+void CodeFrame(u64 frame);
+std::string CodeReport();
+void ForgetCode();
+
 /* Threads (threads.cpp): run the program's first thread from `entry` under the
    kernel's scheduler; returns only by throwing why the run ended. */
 void RunThreads(const lifted::Context& initial, u32 entry, s64 loop_budget);

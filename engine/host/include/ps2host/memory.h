@@ -21,6 +21,8 @@
 
 #include <cstddef>
 #include <functional>
+#include <map>
+#include <utility>
 #include <vector>
 
 #include "ps2rt/types.h"
@@ -70,7 +72,15 @@ public:
     void WatchReads(const std::vector<u32>& addresses);
     /* Whether any store is being watched: if not, a store to main RAM or the
        scratchpad (no register hooks there) may go straight through Translate. */
-    bool watching() const { return !watched_.empty(); }
+    bool watching() const { return !watched_.empty() || code_end_ > code_start_; }
+
+    /* Stores into the program's code, [start, end) (code.cpp): who stores into
+       each word kept - the function storing and its caller - until an empty
+       range stops it. */
+    void WatchCode(u32 start, u32 end);
+    /* The last function seen storing into the code word at `address`, and its
+       caller ({0, 0} if none was seen). */
+    std::pair<u32, u32> CodeWriter(u32 address) const;
 
 private:
     std::vector<u8> rdram_, scratchpad_, ee_registers_, vu_memory_, gs_registers_, iop_ram_, bios_;
@@ -78,6 +88,8 @@ private:
     std::vector<WriteHook> write_hooks_;
     std::vector<u32> watched_;               /* physical addresses */
     std::vector<u32> watched_reads_;
+    u32 code_start_ = 0, code_end_ = 0;      /* physical */
+    std::map<u32, std::pair<u32, u32>> code_writers_;
     void Watched(u32 address, u64 value, u32 size, const char* what = "write", const char* arrow = "<-");
 };
 
