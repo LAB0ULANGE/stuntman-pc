@@ -764,6 +764,19 @@ Outcome DmaStat(Vm&, Context& c) { return Ret(c, u32(-1)); }    // < 0: finished
 // ---------------------------------------------------------------- cdvdman
 // The disc, read from the user's image. Reads finish at once.
 
+// sceCdCallback's function, and the commands done since it last ran: it runs
+// as the CD/DVD interrupt's, with the command (SCECdFuncRead = 1), when the
+// scheduler next looks (CdInterrupts).
+struct CdState {
+    u32 callback = 0;
+    std::vector<u32> done;
+};
+CdState& Cd() {
+    static CdState state;
+    return state;
+}
+constexpr u32 kCdFuncRead = 1;
+
 // sceCdRead(lsn, sectors, buffer, mode): mode points at sceCdRMode
 // { u8 trycount, spindlctrl, datapattern, pad }; the pattern picks 2048, 2328
 // or 2340 bytes a sector.
@@ -774,7 +787,17 @@ Outcome CdRead(Vm& vm, Context& c) {
     if (!GuestDisc().IsOpen() || !GuestDisc().ReadPattern(lsn, sectors, pattern, data.data()))
         return Ret(c, 0);
     std::memcpy(vm.At(buffer, u32(data.size())), data.data(), data.size());
+    if (Cd().callback) Cd().done.push_back(kCdFuncRead);
     return Ret(c, 1);
+}
+
+// sceCdCallback(function): the function called as each command ends; gives
+// the one set before.
+Outcome CdCallback(Vm& vm, Context& c) {
+    const u32 before = Cd().callback;
+    Cd().callback = A(vm, c, 0);
+    if (!Cd().callback) Cd().done.clear();
+    return Ret(c, before);
 }
 
 Outcome CdSync(Vm&, Context& c) { return Ret(c, 0); }              // done
@@ -1067,7 +1090,7 @@ const Map& Table() {
         {{"sifman", 32}, SetDmaIntr},
         {{"cdvdman", 4}, Succeed}, {{"cdvdman", 6}, CdRead}, {{"cdvdman", 8}, CdGetError},
         {{"cdvdman", 10}, CdSearchFile}, {{"cdvdman", 11}, CdSync}, {{"cdvdman", 12}, CdGetDiskType}, {{"cdvdman", 13}, CdDiskReady},
-        {{"cdvdman", 75}, CdMmode},
+        {{"cdvdman", 75}, CdMmode}, {{"cdvdman", 37}, CdCallback},
         {{"thfpool", 4}, CreateFpl}, {{"thfpool", 5}, DeleteFpl}, {{"thfpool", 6}, AllocateFpl},
         {{"thfpool", 7}, PollAllocateFpl}, {{"thfpool", 8}, PollAllocateFpl}, {{"thfpool", 9}, FreeFpl},
         {{"loadcore", 5}, FlushDcache},
@@ -1153,6 +1176,15 @@ void SoundInterrupts(Vm& vm) {
         if (s.spu2.function) vm.Call(s.spu2.function, {1u << core, s.spu2.arg});
         else if (s.irq_callback) vm.Call(s.irq_callback, {0});
     });
+}
+
+// Due CD/DVD interrupts: sceCdCallback's function, once a command it
+// finished. Called by the interpreter's scheduler (iop_vm.cpp).
+void CdInterrupts(Vm& vm) {
+    std::vector<u32> done;
+    done.swap(Cd().done);
+    for (u32 command : done)
+        if (Cd().callback) vm.Call(Cd().callback, {command});
 }
 
 std::string Format(Vm& vm, u32 format, const std::function<u32()>& next) {

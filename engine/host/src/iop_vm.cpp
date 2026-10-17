@@ -378,6 +378,7 @@ void Run(u64 slice) {
     const u64 start = vm.instructions;
     for (;;) {
         SoundInterrupts(vm);
+        CdInterrupts(vm);
         // Completion callbacks of finished SIF DMA (sceSifSetDmaIntr), as interrupts.
         while (!vm.completions.empty()) {
             const auto done = vm.completions.front();

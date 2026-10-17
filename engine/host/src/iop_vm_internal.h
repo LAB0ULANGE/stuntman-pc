@@ -157,6 +157,8 @@ void ServeNext(Vm& vm, Thread& t);
 
 /* Due sound-hardware interrupts (iop_libs.cpp), run by the scheduler. */
 void SoundInterrupts(Vm& vm);
+/* sceCdCallback's function, for each CD/DVD command done since (iop_libs.cpp). */
+void CdInterrupts(Vm& vm);
 
 /* printf-style formatting from IOP memory: `next` yields each argument word. */
 std::string Format(Vm& vm, u32 format, const std::function<u32()>& next);

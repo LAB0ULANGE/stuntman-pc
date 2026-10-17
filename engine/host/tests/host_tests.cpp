@@ -1621,6 +1621,26 @@ void IopSearchesTheDisc() {
           "sceCdlFILE: the record's name and date");
     Check(search("\\movies\\license.xav") == 1 && vm.Read(fp, 4) == 23, "any case, no version");
     Check(search("cdrom0:\\MOVIES\\MISSING.XAV;1") == 0, "a missing file: 0");
+
+    // sceCdCallback: the function set runs, as an interrupt, once a read ends.
+    const u32 handler = 0x001E0000u, seen = 0x001E0100u;
+    const u32 code[] = {0x3C08001Eu, 0xAD040100u, 0x03E00008u, 0};   // sw $a0, 0x100(0x001E0000); jr $ra
+    for (u32 i = 0; i < 4; ++i) vm.Write(handler + 4 * i, code[i], 4);
+    vm.Write(seen, 0, 4);
+    auto call = [&](u32 index, std::vector<u32> args) {
+        Context c;
+        for (std::size_t i = 0; i < args.size(); ++i) c.r[4 + i] = args[i];
+        FindLibrary("cdvdman", index)(vm, c);
+        return c.r[2];
+    };
+    Check(call(37, {handler}) == 0, "sceCdCallback gives the function set before: none");
+    Check(call(6, {23, 1, 0x001E1000u, 0}) == 1 && vm.Read(seen, 4) == 0, "sceCdRead: the callback not yet run");
+    CdInterrupts(vm);
+    Check(vm.Read(seen, 4) == 1, "then run, with SCECdFuncRead");
+    vm.Write(seen, 0, 4);
+    CdInterrupts(vm);
+    Check(vm.Read(seen, 4) == 0, "once a read");
+    Check(call(37, {0}) == handler, "sceCdCallback(0) gives it back and removes it");
     ps2host::GuestDisc().Use({});
 }
 
