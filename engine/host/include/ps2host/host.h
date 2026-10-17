@@ -125,6 +125,8 @@ struct Options {
     std::string batch_overlap;
     /* --newer-list on|off: else the "newer_list" setting's, on (SetNewerList). */
     std::string newer_list;
+    /* --date-area batch|full: else the "date_area" setting's, batch (SetDateArea). */
+    std::string date_area;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
     bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */
     bool gpu = false;              /* draw on the GPU instead of the software GS (gpu_bridge.cpp) */

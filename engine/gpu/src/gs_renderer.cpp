@@ -419,6 +419,7 @@ public:
     void ClutRows(const std::uint32_t* clut, std::uint32_t rows) override;
     bool ReadClut(std::uint32_t* clut) override;
     void SetExactOverlap(bool exact) override { exact_overlap_ = exact; }
+    void SetDateArea(bool batch) override { date_batch_area_ = batch; }
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                     std::uint32_t* width, std::uint32_t* height) override;
     bool ReadWoven(std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) override {
@@ -456,7 +457,9 @@ private:
     /* The destination alpha test's setup pass: stencil 1 where the target's
        alpha bit equals DATM. */
     bool MakeDatePipeline();
-    void DateSetup(VkCommandBuffer cmd, Image& target, Image& depth, std::uint32_t datm);
+    /* Over `area` (the image's pixels): the stencil is read nowhere else. */
+    void DateSetup(VkCommandBuffer cmd, Image& target, Image& depth, std::uint32_t datm, const VkRect2D& area);
+    bool date_batch_area_ = true;   /* SetDateArea */
     /* A target's descriptor for sampling it. */
     VkDescriptorSet SampledSet(Image& image);
     /* Copies of the target being drawn, when it is also the texture: one a
@@ -1743,7 +1746,8 @@ VkDescriptorSet VulkanGsRenderer::SampledSet(Image& image) {
     return image.sampled;
 }
 
-void VulkanGsRenderer::DateSetup(VkCommandBuffer cmd, Image& target, Image& depth, std::uint32_t datm) {
+void VulkanGsRenderer::DateSetup(VkCommandBuffer cmd, Image& target, Image& depth, std::uint32_t datm,
+                                 const VkRect2D& area) {
     if (!SampledSet(target)) return;
     Transition(cmd, target, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
@@ -1759,7 +1763,7 @@ void VulkanGsRenderer::DateSetup(VkCommandBuffer cmd, Image& target, Image& dept
     stencil.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;   // 0 everywhere first
     stencil.clearValue.depthStencil = {0.0f, 0};
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0, 0}, {target.pw(), target.ph()}};
+    ri.renderArea = area;
     ri.layerCount = 1;
     ri.pDepthAttachment = &z;
     ri.pStencilAttachment = &stencil;
@@ -1769,8 +1773,7 @@ void VulkanGsRenderer::DateSetup(VkCommandBuffer cmd, Image& target, Image& dept
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &target.sampled, 0, nullptr);
     VkViewport vp{0, 0, float(target.pw()), float(target.ph()), 0, 1};
     vkCmdSetViewport(cmd, 0, 1, &vp);
-    VkRect2D all{{0, 0}, {target.pw(), target.ph()}};
-    vkCmdSetScissor(cmd, 0, 1, &all);
+    vkCmdSetScissor(cmd, 0, 1, &area);
     FragmentParams params{};
     params.textured = datm;                         // the setup shader's first word is DATM
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentOffset, sizeof params, &params);
@@ -2662,6 +2665,26 @@ void VulkanGsRenderer::Flush() {
         ++complaints;
         std::fprintf(stderr, "[ps2gpu] a batch was dropped: %s\n", pipeline ? "no descriptor set" : "no pipeline");
     }
+    // DATE: the setup pass over the pixels the batch can draw (its vertices'
+    // rectangle, a pixel more each way, within the scissor), not the target:
+    // 1,400 a VBlank in Stuntman's stunt, each over the whole frame.
+    VkRect2D date_area{{0, 0}, {t->pw(), t->ph()}};
+    if (state_.date && date_batch_area_ && !pending_.empty()) {
+        float x0 = pending_[0].x, x1 = x0, y0 = pending_[0].y, y1 = y0;
+        for (const PackedVertex& p : pending_) {
+            x0 = std::min(x0, p.x);
+            x1 = std::max(x1, p.x);
+            y0 = std::min(y0, p.y);
+            y1 = std::max(y1, p.y);
+        }
+        const int w = int(t->width), h = int(std::min(t->height, depth->height));
+        const int ax0 = std::clamp(int(std::floor(x0)) - 1, std::max(0, state_.scissor_x0), w);
+        const int ay0 = std::clamp(int(std::floor(y0)) - 1, std::max(0, state_.scissor_y0), h);
+        const int ax1 = std::clamp(int(std::ceil(x1)) + 2, ax0, std::min(w, state_.scissor_x1 + 1));
+        const int ay1 = std::clamp(int(std::ceil(y1)) + 2, ay0, std::min(h, state_.scissor_y1 + 1));
+        const int k = int(t->scale);
+        date_area = {{ax0 * k, ay0 * k}, {std::uint32_t((ax1 - ax0) * k), std::uint32_t((ay1 - ay0) * k)}};
+    }
     if (pipeline && set) {
         g_.RecordInPass([&](VkCommandBuffer cmd) {
             // Barriers and copies cannot go inside a rendering pass: a batch
@@ -2680,7 +2703,7 @@ void VulkanGsRenderer::Flush() {
                 if (state_.date && !alpha) { last_t = t; last_datm = state_.datm; }
                 else if (t == last_t && alpha) last_t = nullptr;
             }
-            if (state_.date) DateSetup(cmd, *t, *depth, state_.datm);
+            if (state_.date) DateSetup(cmd, *t, *depth, state_.datm, date_area);
             if (copy_first) {
                 ++g_feedback;
                 Transition(cmd, *t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,

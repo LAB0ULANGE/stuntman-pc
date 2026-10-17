@@ -1863,6 +1863,12 @@ bool StartGpuRenderer(std::string* error, GpuMode mode, bool show) {
 
 bool GpuPrimary() { return g_bridge && g_bridge->primary; }
 
+void SetDateArea(const std::string& mode) {
+    if (!g_bridge) return;
+    g_bridge->renderer->SetDateArea(mode != "full");
+    if (mode == "full") std::fprintf(stderr, "[gpu] DATE set up over the whole target\n");
+}
+
 void SetNewerList(bool on) {
     if (!g_bridge) return;
     g_bridge->newer_list = on;

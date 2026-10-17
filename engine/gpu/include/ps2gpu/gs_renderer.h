@@ -255,6 +255,9 @@ public:
        drew: by their bounding rectangles (false), or (true, the default) only
        where their triangles share a pixel - their interiors meeting. */
     virtual void SetExactOverlap(bool exact) { (void)exact; }
+    /* The destination alpha test's setup pass over the batch's rectangle
+       (true, the default) or over the whole target. */
+    virtual void SetDateArea(bool batch) { (void)batch; }
     /* The GPU's CLUT as it stands, 256 entries (a check: the texture cache's). */
     virtual bool ReadClut(std::uint32_t* clut) {
         (void)clut;

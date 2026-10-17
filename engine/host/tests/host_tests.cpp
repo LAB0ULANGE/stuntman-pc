@@ -1886,11 +1886,22 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         sprite(60, 4, 100, 20, 0x99AABBCCu ^ colour);
         frame(1);
         sprite(0, 40, 20, 60, 0x0F1E2D3Cu ^ colour);
+        // The destination alpha test (DATE, DATM 0): drawn only where the
+        // pixel's alpha bit is clear - set up over the batch's rectangle.
+        frame(2);
+        sprite(0, 64, 128, 96, 0x80405060u ^ colour);                  // alpha bit set
+        sprite(64, 64, 128, 96, 0x00102030u ^ colour);                 // clear
+        gs.WriteRegister(0x47, 1u << 14);                               // TEST: DATE
+        sprite(32, 60, 120, 90, 0x7F6E5D4Cu ^ colour);
+        gs.WriteRegister(0x47, 0);
         gs.Finish();
     };
+    // The newer images in a list, the DATE setup over the batch; then the
+    // ways before (newer_list=off, date_area=full).
     bool same = true;
     for (int list = 1; list >= 0; --list) {
         ps2host::SetNewerList(list != 0);
+        ps2host::SetDateArea(list ? "batch" : "full");
         const u32 fbp = list ? 0x10 : 0x30, colour = list ? 0 : 0x01010101u;
         auto soft = std::make_unique<Gs>();
         scene(*soft, fbp, colour);
@@ -1900,9 +1911,10 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         gpu.on_memory(begin, end, false);                               // the CPU reads it
         same = same && std::memcmp(gpu.memory.data() + begin * 256, soft->memory.data() + begin * 256,
                                    (end - begin) * 256) == 0;
-        Check(same, list ? "GPU bridge: images at two widths over one memory, read back as the GS has it"
-                         : "GPU bridge: the same, newer images looked for among all (newer_list=off)");
+        Check(same, list ? "GPU bridge: images at two widths over one memory, and DATE, read back as the GS has it"
+                         : "GPU bridge: the same, newer images looked for among all, DATE set up over the target");
     }
+    ps2host::SetDateArea("batch");
     ps2host::SetNewerList(true);
 #endif
 }
