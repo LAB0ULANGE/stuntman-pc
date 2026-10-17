@@ -17,7 +17,7 @@ and say here what each reaches and at which frames:
 
 | file | reaches | frames |
 | --- | --- | --- |
-| `language_fr.args` | the language select (from ~150); meant to choose FRANCAIS (down@280, cross@300) - **not yet**: the presses reach the game's input (0x01F30610 +0x20/+0x24) but the menu does not act on them; no CRCs recorded | 0-3000 |
+| `language_fr.args` | the language select (from ~150), FRANCAIS chosen (down@280, cross@300); the licence movie MOVIES\LICENSE.XAV (in STUNTMAN.IMG, XAVSTRM.IRX) from ~380, black - the IPU's IDEC is not modelled; the title screen from ~550 to the end; no CRCs recorded yet (the movie is not drawn) | 0-3000 |
 
 `python engine/tools/regress_all.py` runs every one of them (and every other
 game's, given their repositories) - before an engine version is tagged.
