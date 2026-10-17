@@ -327,6 +327,9 @@ void SetGsTraceFrame(long long frame);
    GPU has it) - to set beside another run's (engine/tools/gsmem.py). */
 void SetGsDumpFrame(long long frame);
 void FrameDone(u64 frame);
+/* The interlaced field being shown, 0 or 1 (CSR.FIELD): the frame's parity,
+   changing at each vertical blank. */
+u32 ShownField();
 /* The window (window.cpp): opened with --window, presented each frame. */
 bool OpenWindow(const wchar_t* title, int width, int height);
 /* The game's name, for the window's title (instead of the host's own, "PS2

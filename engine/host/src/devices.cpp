@@ -593,7 +593,14 @@ void FinishCapture(u64 frame) {
 
 void RequestCapture() { g_capture_request = true; }
 
+// The field being shown (CSR.FIELD): it changes at each vertical blank, an
+// interlaced picture's two fields in turn (FrameDone).
+std::atomic<u32> g_field{0};
+
+u32 ShownField() { return g_field.load(std::memory_order_relaxed); }
+
 void FrameDone(u64 frame) {
+    g_field.store(u32(frame & 1), std::memory_order_relaxed);
     CodeFrame(frame);
     FrameTimes(frame);
     timeline::Frame(frame);
@@ -843,8 +850,10 @@ void InstallDevices() {
         });
     });
     m.OnRead(kGsCsr, [](u32, u64 stored) {
-        static u64 field = 0;
-        field ^= 1u << 13;                          // FIELD alternates each frame
+        // FIELD: the field shown since the last vertical blank - the same
+        // however often it is read (it changed at every read: a game reading
+        // it twice in a field saw both).
+        const u64 field = u64(ShownField()) << 13;
         return (stored & ~u64(1u << 13)) | field | (1u << 3);   // VSINT pending
     });
     m.OnRead(0x1000F000u, [](u32, u64) { return u64(IntcStat()); });     // INTC_STAT

@@ -1775,6 +1775,18 @@ void PictureRateCountsGamePictures() {
           "the picture rate: 6.x images/s at 38 blanks a second, once a second");
 }
 
+// CSR.FIELD is the field being shown: the same however often it is read in
+// a field (it changed at every read). Last of the tests: it installs the
+// devices' register hooks.
+void GsCsrFieldHoldsThroughAField() {
+    ps2host::InstallDevices();
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u64 first = m.Read(0x12001000u, 8), second = m.Read(0x12001000u, 8);
+    Check(((first >> 13) & 1) == ((second >> 13) & 1) && ((first >> 13) & 1) == ps2host::ShownField() &&
+              ((first >> 3) & 1),
+          "GS CSR: FIELD is the field shown, the same at every read in it");
+}
+
 // vu_record=on in the PC settings: a played run records the vector units'
 // microprograms beside the settings, interpreted meanwhile; nothing added
 // otherwise.
@@ -2157,6 +2169,7 @@ int main() {
     PictureRateCountsGamePictures();
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();
+    GsCsrFieldHoldsThroughAField();                 // last: it installs the devices
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }
