@@ -149,20 +149,33 @@ overrides run the patched code at those three entries (`overrides.cpp`,
 checking the word in memory at each call). newlib's realloc and calloc stay
 newlib's, as on the console.
 
-## The licence movie: XAVSTRM.IRX and the IPU's IDEC (to do)
+## The movies: XAVSTRM.IRX and the IPU's IDEC
 
-After the language select the game plays `MOVIES\LICENSE.XAV`, which is no
-file of the disc's own: the name sent to XAVSTRM.IRX (RPC 0x7F7F7F7F, client
-`0x00204010`, called from `0x00170B38`) carries its place in STUNTMAN.IMG,
-which the module parses (strstr ";" then strtoul) before sceCdSearchFile
-finds STUNTMAN.IMG. The module streams the sectors (sceCdRead from IOP
-thread 8, sceCdCallback), waits for SIF software register 31 from the EE
-before it starts (sceSifGetSreg), plays the sound through libsd block
-transfers, and sends the video data to the EE by SIF commands.
+After the language select the game plays `MOVIES\LICENSE.XAV` then
+`MOVIES\GAMEINTR.XAV` (the intro, ~5300 frames, not skippable on a first
+start), and the front end's own screens are movies too (table at
+`0x00269ED0`: `FRONTEND\FEIN.XAV`, `FEMAIN`, `CAREER`, `SCARAB`, `TOOTH`,
+`WHOOP`, `LIVE`, `BLOOD`, `CONS`). None is a file of the disc's own: the name
+sent to XAVSTRM.IRX (RPC 0x7F7F7F7F, client `0x00204010`) is
+`cdrom0:\STUNTMAN.IMG;1:<sector>:<bytes>`, which the module parses (strstr
+";" then strtoul) before sceCdSearchFile finds STUNTMAN.IMG. The module
+streams the sectors (sceCdRead from its reader thread, sceCdCallback), waits
+for SIF software register 31 from the EE before it starts (sceSifGetSreg),
+plays the sound through libsd block transfers and sends the video to the EE
+by SIF commands.
 
-The EE decodes the pictures with the IPU's **IDEC** (a whole intra slice
-to RGB, EE User's Manual 8.3), which the host does not model yet
-(`[ipu] IDEC is not modelled`, the command ends at once): the movie is
-black for ~170 frames (~380-550 in `language_fr`), then the title screen
-comes. To do: IDEC in `engine/host/src/ipu.cpp`, a macroblock a step,
-from BDEC's Block/Idct and CSC; then `language_fr`'s CRCs.
+An XAV file: "XAVS", width, height (0x280 x 0x1C0), frames (LICENSE 0x1D7,
+GAMEINTR 0x75A), ..., then chunks: 'V' and a 24-bit size, a flag byte, an
+intra picture's macroblocks. The EE's `0x00208310` decodes a picture: FDEC
+32 (the flag byte: IPU_CTRL from its bits, DTD from bit 2), FDEC 8, then
+**one IDEC** (`0x10010000`: QSC 1, RGB32) for the whole picture, and takes
+rows x columns macroblocks from channel 3, 64 quadwords each (`0x00208610`),
+each to the GS (`0x00205CB0`); a channel that does not end within 0xFFFFFF
+polls ends the movie (RPC procedure 3, `0x00204568` from `0x002050B4`).
+
+The pictures start with the first macroblock's macroblock_type - no
+address increment before it: GAMEINTR's first picture reads to the end of
+its data (1120 macroblocks) only so; the increments come after each
+macroblock. The host's IDEC (engine commits 00eb882, d56f0b5, 48a77ef)
+decodes so, slice after slice; checked against FFmpeg by
+`engine/tools/idec_check.py`. To do: `language_fr`'s CRCs.
