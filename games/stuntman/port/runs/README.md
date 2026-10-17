@@ -18,6 +18,7 @@ and say here what each reaches and at which frames:
 | file | reaches | frames |
 | --- | --- | --- |
 | `language_fr.args` | the language select (from ~150), FRANCAIS chosen (down@280, cross@300); the licence movie MOVIES\LICENSE.XAV (in STUNTMAN.IMG, XAVSTRM.IRX) from ~380, black - the IPU's IDEC is not modelled; the title screen from ~550 to the end; no CRCs recorded yet (the movie is not drawn) | 0-3000 |
+| `title_to_stunt.args` | (in progress) from a blank card: FRANCAIS, the licence and the intro (not skippable the first time, to ~6000), the title, the main menu (~7000), CARRIERE CASCADEUR (cross@7100), NOUVELLE PARTIE (cross@7400), the name (VIC, cross@7600), the career movies, the first film's poster "Toothless in Wapping" (~9450, cross@9550), the stunt's briefing in 3D (~9750-10950); no CRCs yet | 0-11000 |
 
 `python engine/tools/regress_all.py` runs every one of them (and every other
 game's, given their repositories) - before an engine version is tagged.
