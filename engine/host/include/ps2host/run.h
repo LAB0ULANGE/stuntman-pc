@@ -216,6 +216,10 @@ void GpuShadowFrame(u64 frame, const std::string& dump_dir);
 void GpuCaptureBegin(u64 frame, const std::string& passes_dir);
 std::string GpuCaptureScreen(const std::string& dir);
 bool GpuPrimary();
+/* The GPU's texture cache (gpu_bridge.cpp, Bridge::texture_cache): "on", "off"
+   (every CLUT the GPU loads, loaded again), or "check" (loaded all the same,
+   and any CLUT the cache would have kept that came out different said). */
+void SetTextureCache(const std::string& mode);
 /* The GPU renderer's internal resolution, now (a GS replay's; a run takes
    the "resolution" setting between frames). */
 void GpuSetScale(u32 scale);

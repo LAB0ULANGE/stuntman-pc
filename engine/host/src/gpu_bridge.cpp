@@ -268,6 +268,22 @@ struct Bridge {
     u32 clut_cpu = 0xFFFF, clut_gpu = 0;
     u64 clut_generation[16] = {};
     u64 gpu_clut_loads = 0;
+    // The texture cache (texture_cache, --texture-cache): a CLUT the GPU
+    // loads again from the same blocks, set the same way, with nothing
+    // written or drawn there since, is the same CLUT - not loaded again, its
+    // rows' generation kept, so the textures read through it stay decoded
+    // (Stuntman's stunt loads one ~90 times a frame, each time decoding its
+    // 512x512 texture again). A block's last CPU write (stamp), the last draw
+    // over it (Owned::drawn_serial) and the load's settings make a source;
+    // each GPU row knows the source it was loaded from (0: none, or rows sent
+    // from the CPU since). "check": loaded all the same, the GPU's CLUT read
+    // before and after and any difference said - the cache's soundness, run
+    // before it is trusted.
+    enum class TextureCache { kOff, kOn, kCheck } texture_cache = TextureCache::kOn;
+    std::vector<u64> block_stamp = std::vector<u64>(16384, 0);
+    u64 stamp = 0;
+    u64 gpu_clut_source[16] = {};
+    u64 clut_loads_kept = 0, clut_checks = 0, clut_check_differences = 0;
     // PS2HOST_GPU_DUMP_FRAME=N (and PS2HOST_GPU_DUMP_DIR): during frame N, each
     // target as it stood when drawing moved on to another, as a BMP, with a
     // line per pass on stderr - to see which pass of a frame goes wrong.
@@ -434,7 +450,10 @@ void Sync(Bridge& b, u32 begin, u32 end, bool write, const Owned* except = nullp
         const TimelineStep step("sync: memory for the CPU");
         Coherent(b, begin, end, false);
     }
-    if (write) std::fill(b.blocks.begin() + begin, b.blocks.begin() + std::min(end, 16384u), Bridge::kCpuNewer);
+    if (write) {
+        std::fill(b.blocks.begin() + begin, b.blocks.begin() + std::min(end, 16384u), Bridge::kCpuNewer);
+        std::fill(b.block_stamp.begin() + begin, b.block_stamp.begin() + std::min(end, 16384u), ++b.stamp);
+    }
     for (auto& [key, o] : b.owned) {
         if (&o == except) continue;
         if (!write || end <= o.begin || o.full_end <= begin) continue;
@@ -476,6 +495,9 @@ void SyncWrite(Bridge& b, u32 begin, u32 end, const u8* cover) {
         if (cover[i - begin] == 1 && b.blocks[i] == Bridge::kGpuNewer) b.patch.blocks.push_back(i);
     for (u32 i = first; i < last; ++i)
         if (cover[i - begin] && !(cover[i - begin] == 1 && b.blocks[i] == Bridge::kGpuNewer)) b.blocks[i] = Bridge::kCpuNewer;
+    ++b.stamp;
+    for (u32 i = first; i < last && i < 16384; ++i)
+        if (cover[i - begin]) b.block_stamp[i] = b.stamp;
     for (auto& [key, o] : b.owned) {
         if (last <= o.begin || o.full_end <= first) continue;
         if (first < o.end) MarkStale(o, 1, first, last);
@@ -800,8 +822,35 @@ bool LoadClut(Bridge& b, u64 tex0, u64 texa) {
         b.clut_gpu &= ~rows;
         return false;
     }
+    // Its source (Bridge::texture_cache): the settings, the blocks' last
+    // CPU write, the last draw over them.
+    u64 source = 0;
+    bool same = false;
+    if (b.texture_cache != Bridge::TextureCache::kOff) {
+        u64 written = 0, drawn = 0;
+        for (u32 i = cbp; i < cbp + 8 && i < 16384; ++i) written = std::max(written, b.block_stamp[i]);
+        for (const auto& [key, o] : b.owned)
+            if (o.begin < cbp + 8 && cbp < std::max(o.drawn_end, o.dirty_end)) drawn = std::max(drawn, o.drawn_serial);
+        const u64 parts[] = {cbp, cpsm, csa, u64(psm == gs::PSMT8 || psm == gs::PSMT8H), texa & 0x80FF,
+                             Bits(texa, 32, 8), written, drawn};
+        source = 1469598103934665603ull;
+        for (u64 part : parts) source = (source ^ part) * 1099511628211ull;
+        source |= 1;
+        same = true;
+        for (u32 r = 0; r < 16; ++r)
+            if ((rows >> r & 1) && b.gpu_clut_source[r] != source) same = false;
+        if (same && b.texture_cache == Bridge::TextureCache::kOn) {
+            b.clut_gpu |= rows;             // the GPU's rows hold it still
+            b.clut_cpu &= ~rows;
+            ++b.clut_loads_kept;
+            return true;
+        }
+    }
     Timed timed(Section::GpuSync);
     const TimelineStep step("sync: a CLUT load");
+    // The check: the GPU's CLUT before a load the cache would have kept.
+    u32 before[256] = {};
+    const bool check = same && b.renderer->ReadClut(before);
     for (auto& [key, o] : b.owned)
         if (o.gpu_newer && o.dirty_begin < cbp + 8 && cbp < o.dirty_end) WriteBack(b, o);
     Coherent(b, cbp, cbp + 8, true);
@@ -813,10 +862,26 @@ bool LoadClut(Bridge& b, u64 tex0, u64 texa) {
     load.texa_lo = u32(texa & 0x80FF);
     load.ta1 = Bits(texa, 32, 8);
     b.renderer->ClutFromMemory(load);
+    if (check) {
+        u32 after[256] = {};
+        if (b.renderer->ReadClut(after)) {
+            ++b.clut_checks;
+            bool differs = false;
+            for (u32 r = 0; r < 16; ++r)
+                if ((rows >> r & 1) && std::memcmp(before + r * 16, after + r * 16, 64) != 0) differs = true;
+            if (differs && b.clut_check_differences++ < 20)
+                std::fprintf(stderr, "[texture cache] CHECK: the CLUT from CBP %X (CPSM %u, CSA %u) changed though "
+                             "its source did not: the cache would have shown it stale\n",
+                             unsigned(cbp), unsigned(cpsm), unsigned(csa));
+        }
+    }
     b.clut_gpu |= rows;
     b.clut_cpu &= ~rows;
     for (u32 r = 0; r < 16; ++r)
-        if (rows >> r & 1) ++b.clut_generation[r];
+        if (rows >> r & 1) {
+            ++b.clut_generation[r];
+            b.gpu_clut_source[r] = source;
+        }
     ++b.gpu_clut_loads;
     return true;
 }
@@ -945,7 +1010,10 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
         // Through the GPU's CLUT, its rows the GPU lacks sent over first.
         d.clut = nullptr;
         if (clut_rows) {
-            b.renderer->ClutRows(gs::TheGs().Clut().data(), b.clut_cpu & ~b.clut_gpu);
+            const u32 sent = b.clut_cpu & ~b.clut_gpu;
+            b.renderer->ClutRows(gs::TheGs().Clut().data(), sent);
+            for (u32 r = 0; r < 16; ++r)
+                if (sent >> r & 1) b.gpu_clut_source[r] = 0;
             b.clut_gpu |= b.clut_cpu;
         }
         ++g_mutations;
@@ -1270,7 +1338,10 @@ void OnDraw(const gs::Gs::DrawCall& call) {
                 }
                 if (tex_format == 4 && b_clut_rows_cpu_only(s)) {
                     // The CLUT rows only the CPU has, over to the GPU's first.
-                    s.renderer->ClutRows(gs::TheGs().Clut().data(), s.clut_cpu & ~s.clut_gpu);
+                    const u32 sent = s.clut_cpu & ~s.clut_gpu;
+                    s.renderer->ClutRows(gs::TheGs().Clut().data(), sent);
+                    for (u32 r = 0; r < 16; ++r)
+                        if (sent >> r & 1) s.gpu_clut_source[r] = 0;
                     s.clut_gpu |= s.clut_cpu;
                 }
                 state.texture_target = true;
@@ -1701,6 +1772,14 @@ bool StartGpuRenderer(std::string* error, GpuMode mode, bool show) {
 
 bool GpuPrimary() { return g_bridge && g_bridge->primary; }
 
+void SetTextureCache(const std::string& mode) {
+    if (!g_bridge) return;
+    g_bridge->texture_cache = mode == "off"     ? Bridge::TextureCache::kOff
+                              : mode == "check" ? Bridge::TextureCache::kCheck
+                                                : Bridge::TextureCache::kOn;
+    if (mode != "on") std::fprintf(stderr, "[texture cache] %s\n", mode.c_str());
+}
+
 void GpuSetScale(u32 scale) {
     if (g_bridge && scale != g_bridge->renderer->Scale()) Rescale(*g_bridge, scale);
 }
@@ -1862,6 +1941,16 @@ std::string GpuShadowSummary() {
                       static_cast<unsigned long long>(g_bridge->gpu_decodes),
                       static_cast<unsigned long long>(g_bridge->gpu_clut_loads));
         std::string summary = std::string(text) + "\ngpu: " + ps2gpu::SubmitStats();
+        char cache[200];
+        std::snprintf(cache, sizeof cache,
+                      "\ngpu: texture cache %s: %llu CLUT loads kept; checked %llu, %llu different",
+                      g_bridge->texture_cache == Bridge::TextureCache::kOff     ? "off"
+                      : g_bridge->texture_cache == Bridge::TextureCache::kCheck ? "check"
+                                                                                : "on",
+                      static_cast<unsigned long long>(g_bridge->clut_loads_kept),
+                      static_cast<unsigned long long>(g_bridge->clut_checks),
+                      static_cast<unsigned long long>(g_bridge->clut_check_differences));
+        summary += cache;
         if (texture_pack::Count())
             summary += "\ngpu: texture pack of " + std::to_string(texture_pack::Count()) + " files, " +
                        std::to_string(g_bridge->replacements) + " textures replaced";

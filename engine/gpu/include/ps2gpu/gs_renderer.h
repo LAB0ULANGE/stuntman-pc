@@ -250,6 +250,11 @@ public:
     /* Rows of the GPU's CLUT (16 entries each; bit r of `rows` for row r)
        from the host's copy, `clut` being all 256 entries. */
     virtual void ClutRows(const std::uint32_t* clut, std::uint32_t rows) = 0;
+    /* The GPU's CLUT as it stands, 256 entries (a check: the texture cache's). */
+    virtual bool ReadClut(std::uint32_t* clut) {
+        (void)clut;
+        return false;
+    }
     /* A depth buffer's Z (the GS's, unsigned), rows top-down; false if there
        is none of that size. */
     virtual bool ReadDepth(std::uint32_t zbp, std::uint32_t width, std::uint32_t height,

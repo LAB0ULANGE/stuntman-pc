@@ -641,6 +641,11 @@ int Run(const Options& options) {
         const GpuMode mode = options.gpu ? GpuMode::Primary : options.gpu_shadow_rtt ? GpuMode::ShadowRtt : GpuMode::Shadow;
         if (!StartGpuRenderer(&error, mode, options.gpu_show))
             std::fprintf(stderr, "%s: %s\n", options.gpu ? "--gpu" : "--gpu-shadow", error.c_str());
+        // The texture cache: asked, else the setting's, on by default.
+        const char* check = std::getenv("PS2HOST_TEXTURE_CACHE_CHECK");
+        SetTextureCache(!options.texture_cache.empty() ? options.texture_cache
+                        : check && *check == '1'       ? std::string("check")
+                                                       : Setting("texture_cache", "on"));
     }
     bool sound = false;
     if (options.audio) {
@@ -748,6 +753,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--vu-record" && i + 1 < argc) options.vu_record = argv[++i];
         else if (arg == "--vu-interpret") options.vu_interpret = true;
         else if (arg == "--deinterlace" && i + 1 < argc) options.deinterlace = argv[++i];
+        else if (arg == "--texture-cache" && i + 1 < argc) options.texture_cache = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;

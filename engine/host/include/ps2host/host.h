@@ -116,6 +116,10 @@ struct Options {
        window in real time), the "deinterlace" setting's, weave by default;
        else off. */
     std::string deinterlace;
+    /* --texture-cache on|off|check: the GPU's texture cache; else the
+       "texture_cache" setting's, on by default (PS2HOST_TEXTURE_CACHE_CHECK=1:
+       check). */
+    std::string texture_cache;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
     bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */
     bool gpu = false;              /* draw on the GPU instead of the software GS (gpu_bridge.cpp) */

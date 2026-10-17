@@ -344,6 +344,7 @@ public:
     void TextureFromMemory(std::uint64_t key, const GsTextureDecode& decode) override;
     void ClutFromMemory(const GsClutLoad& load) override;
     void ClutRows(const std::uint32_t* clut, std::uint32_t rows) override;
+    bool ReadClut(std::uint32_t* clut) override;
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                     std::uint32_t* width, std::uint32_t* height) override;
     bool ReadWoven(std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) override {
@@ -1869,6 +1870,25 @@ void VulkanGsRenderer::ClutFromMemory(const GsClutLoad& load) {
         g_.Mark(cmd, kProfDecode);
         MemoryBarrier(cmd);
     });
+}
+
+bool VulkanGsRenderer::ReadClut(std::uint32_t* clut) {
+    Flush();
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void* mapped = nullptr;
+    if (!Buffer(1024, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &buffer, &memory, &mapped)) return false;
+    g_.Run([&](VkCommandBuffer cmd) {
+        MemoryBarrier(cmd);
+        VkBufferCopy copy{0, 0, 1024};
+        vkCmdCopyBuffer(cmd, clut_, buffer, 1, &copy);
+        MemoryBarrier(cmd);
+    }, "a CLUT read-back");
+    std::memcpy(clut, mapped, 1024);
+    vkUnmapMemory(g_.device, memory);
+    vkDestroyBuffer(g_.device, buffer, nullptr);
+    vkFreeMemory(g_.device, memory, nullptr);
+    return true;
 }
 
 void VulkanGsRenderer::ClutRows(const std::uint32_t* clut, std::uint32_t rows) {
