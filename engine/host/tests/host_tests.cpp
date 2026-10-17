@@ -1701,6 +1701,16 @@ void IopPoolsAndLibraryCalls() {
     Check(s32(call("thfpool", 9, {pool, first + 4})) == -426, "FreeFpl of no block: KE_ILLEGAL_MEMBLOCK");
     Check(call("thfpool", 9, {pool, first}) == 0 && call("thfpool", 7, {pool}) == first,
           "a block freed with nobody waiting is given again");
+    // A waiter terminated and deleted leaves the queue: the block freed after
+    // goes back to the pool, not to a thread that is no more.
+    vm.current = 900;
+    call("thfpool", 6, {pool}, &waited);
+    Check(waited == Outcome::Block, "the pool empty again, a thread waits");
+    vm.current = 901;
+    vm.threads[900].stack = 0;
+    Check(call("thbase", 10, {900}) == 0 && call("thbase", 5, {900}) == 0, "the waiter terminated and deleted");
+    Check(call("thfpool", 9, {pool, first}) == 0 && !vm.threads.count(900) && call("thfpool", 7, {pool}) == first,
+          "FreeFpl with the waiter gone: the block back in the pool, no thread made up");
     Check(call("thfpool", 5, {pool}) == 0 && s32(call("thfpool", 6, {pool})) == -412,
           "DeleteFpl, then the pool is unknown");
     vm.current = saved_current;

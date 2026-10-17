@@ -122,6 +122,15 @@ Outcome DeleteThread(Vm& vm, Context& c) {
 Outcome TerminateThread(Vm& vm, Context& c) {
     auto found = vm.threads.find(A(vm, c, 0));
     if (found == vm.threads.end()) return Ret(c, u32(KE_UNKNOWN_THID));
+    // Ended while it waited, it leaves the queue it waited in: the next
+    // SignalSema or FreeFpl goes to the next waiter - not to it, which may be
+    // deleted by then.
+    const u32 id = found->first;
+    auto leave = [id](std::deque<u32>& waiting) {
+        waiting.erase(std::remove(waiting.begin(), waiting.end(), id), waiting.end());
+    };
+    for (auto& entry : vm.semaphores) leave(entry.second.waiting);
+    for (auto& entry : vm.pools) leave(entry.second.waiting);
     found->second.ready = false;
     found->second.wait = Wait::Dormant;
     return Ret(c, KE_OK);
