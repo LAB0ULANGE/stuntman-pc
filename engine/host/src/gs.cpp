@@ -154,6 +154,13 @@ void Gs::Words(int path, const u32* words, u32 count, u32 from) {
             i += 4 * qwords;
             continue;
         }
+        // A whole quadword: as Word would hand it on at its fourth word.
+        if (whole_qwords && p.pending_count == 0 && count - i >= 4) {
+            if (from != kNoSource) dma_source_ = from + 4 * (i + 3);
+            Qword(path, u64(words[i]) | u64(words[i + 1]) << 32, u64(words[i + 2]) | u64(words[i + 3]) << 32);
+            i += 4;
+            continue;
+        }
         if (from != kNoSource) dma_source_ = from + 4 * i;
         Word(path, words[i++]);
     }

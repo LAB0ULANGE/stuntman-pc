@@ -636,6 +636,8 @@ int Run(const Options& options) {
     Vu1().fast = options.vu_fast;
     SetUntilFrame(options.until_frame);
     SetFrameTimes(options.frame_times);
+    gs::TheGs().whole_qwords =
+        (!options.gs_whole_qwords.empty() ? options.gs_whole_qwords : Setting("gs_whole_qwords", "on")) != "off";
     if (options.gpu || options.gpu_shadow) {
         std::string error;
         const GpuMode mode = options.gpu ? GpuMode::Primary : options.gpu_shadow_rtt ? GpuMode::ShadowRtt : GpuMode::Shadow;
@@ -759,6 +761,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--texture-cache" && i + 1 < argc) options.texture_cache = argv[++i];
         else if (arg == "--batch-overlap" && i + 1 < argc) options.batch_overlap = argv[++i];
         else if (arg == "--newer-list" && i + 1 < argc) options.newer_list = argv[++i];
+        else if (arg == "--gs-whole-qwords" && i + 1 < argc) options.gs_whole_qwords = argv[++i];
         else if (arg == "--date-area" && i + 1 < argc) options.date_area = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];

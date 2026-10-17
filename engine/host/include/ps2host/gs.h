@@ -171,6 +171,9 @@ public:
        [begin, end), read or written: image transfers, local copies, CLUT
        loads, the displayed picture. */
     bool rasterize = true;
+    /* Words: whole quadwords straight to Qword (true, the gs_whole_qwords
+       setting's default), or each word through Word as before. */
+    bool whole_qwords = true;
     std::function<void(u32 begin, u32 end, bool write)> on_memory;
     /* An image transfer about to write blocks [begin, end), when set (else
        on_memory): cover[i] for block begin + i - 0 not written, 1 written in

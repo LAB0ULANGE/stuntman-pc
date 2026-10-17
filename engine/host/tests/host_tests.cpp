@@ -470,6 +470,38 @@ void GsDrawsASprite() {
     Check(gs.primitives() == 1 && gs.pixels_drawn() == 8, "one sprite of 4x2 pixels");
 }
 
+// GIF packets taken a quadword at a time (Gs::whole_qwords) draw as taken a
+// word at a time, also when a call ends inside a quadword.
+void GsTakesWholeQuadwordsAsWords() {
+    using namespace ps2host::gs;
+    std::vector<u32> words;
+    const auto qword = [&](u64 low, u64 high) {
+        words.insert(words.end(), {u32(low), u32(low >> 32), u32(high), u32(high >> 32)});
+    };
+    for (u32 k = 0; k < 6; ++k) {
+        // PACKED, PRE with PRIM 6 (a sprite): RGBA, XYZ2, XYZ2.
+        qword(1ull | 1ull << 15 | 1ull << 46 | 6ull << 47 | 3ull << 60, 0x551);
+        qword(0x40u + k * 16 | u64(0x20u) << 32, 0x10u | u64(0x80u) << 32);
+        qword(u64((k * 8) << 4) | u64(u64(k * 4) << 4) << 32, 0);
+        qword(u64((k * 8 + 12) << 4) | u64(u64(k * 4 + 9) << 4) << 32, 0);
+    }
+    Gs whole, single;
+    single.whole_qwords = false;
+    for (Gs* gs : {&whole, &single}) {
+        gs->WriteRegister(0x4C, u64(1) << 16 | u64(PSMCT32) << 24);     // FRAME 64 wide
+        gs->WriteRegister(0x40, u64(63) << 16 | u64(63) << 48);
+        for (std::size_t at = 0; at < words.size();) {                  // calls of 7 words
+            const u32 n = u32(std::min<std::size_t>(7, words.size() - at));
+            gs->Words(1, words.data() + at, n, Gs::kNoSource);
+            at += n;
+        }
+        gs->Finish();
+    }
+    Check(whole.primitives() == 6 && std::memcmp(whole.memory.data(), single.memory.data(), 64 * 64 * 4) == 0 &&
+              whole.memory.Read(0, 1, 2, 2, PSMCT32) != 0,
+          "GS: packets taken a quadword at a time draw as a word at a time");
+}
+
 // Primitives drawn in bands of rows on several threads: one over the same
 // memory through another width (the rows of one are other rows of the
 // other) still lands after the one before it.
@@ -2275,6 +2307,7 @@ int main() {
     GsLayoutsArePermutations();
     GsDrawsASprite();
     GsDrawsInOrderAcrossWidths();
+    GsTakesWholeQuadwordsAsWords();
     GsWeavesFieldsAsATelevision();
     GsFogsTowardsFogcol();
     GsLoadsACsm2Clut();
