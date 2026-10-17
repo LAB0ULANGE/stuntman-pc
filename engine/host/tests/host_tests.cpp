@@ -2043,6 +2043,35 @@ void SpuDecodesAdpcmAndPlaysAVoice() {
     Check(heard[2 * 575] == 0 && heard[2 * 575 + 1] > 3500, "SPU2: the sweep reaches silence, the other side plays on");
     Check(spu.GetParam(0x0600) == 0, "SPU2: VOLXL, the current volume, is the sweep's");
 
+    // Sound data input (sceSdBlockTrans's loop, a movie's sound): 0x200 bytes
+    // of left samples then 0x200 of right, played at BVOL into the dry mix;
+    // silent at BVOL 0 and once stopped.
+    {
+        Spu2 adma;
+        std::vector<Spu2::u8> pcm(1024);
+        for (int i = 0; i < 256; ++i) {
+            const Spu2::s16 l = 8000, r = -16000;
+            std::memcpy(&pcm[2 * i], &l, 2);
+            std::memcpy(&pcm[0x200 + 2 * i], &r, 2);
+        }
+        std::vector<Spu2::s16> out;
+        adma.SetOutput([&](const Spu2::s16* frames, Spu2::u32 count) { out.assign(frames, frames + 2 * count); });
+        adma.Advance(1000, none);
+        adma.SetInput(0, pcm.data(), Spu2::u32(pcm.size()));
+        adma.Advance(2000, none);                   // BVOL still 0
+        const bool silent = out.size() == 96 && out[50] == 0 && out[51] == 0;
+        adma.SetParam(0x0F00, 0x3FFF);              // BVOLL, core 0
+        adma.SetParam(0x1000, 0x3FFF);              // BVOLR
+        adma.Advance(12000, none);                  // 480 samples: round the 256-frame loop
+        const int left = out.size() == 960 ? out[2 * 400] : 0, right = out.size() == 960 ? out[2 * 400 + 1] : 0;
+        const bool heard = left > 3000 && right < -6000 && -right > left * 19 / 10 && -right < left * 21 / 10;
+        if (!heard) std::fprintf(stderr, "  sound data input: %zu samples, %d %d\n", out.size(), left, right);
+        adma.SetInput(0, nullptr, 0);
+        adma.Advance(13000, none);
+        Check(silent && heard && out.size() == 96 && out[50] == 0,
+              "SPU2: the sound data input plays its loop at BVOL, left and right, until stopped");
+    }
+
     // The reverb: one loud sample sent only to it (VMIXEL/VMIXER, not the dry
     // mix) comes out later, and keeps coming out after the voice has ended.
     Spu2 wet;

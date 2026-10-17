@@ -104,7 +104,9 @@ void Spu2::SetParam(u32 entry, u32 value) {
         case 0x0A: c.mvolr = value; c.main_right.Set(value); break;    // SD_P_MVOLR
         case 0x0B: c.evoll = value; break;             // SD_P_EVOLL: the reverb's output
         case 0x0C: c.evolr = value; break;             // SD_P_EVOLR
-        default: break;                         // external input: not yet
+        case 0x0F: c.bvoll = value; break;             // SD_P_BVOLL: the sound data input
+        case 0x10: c.bvolr = value; break;             // SD_P_BVOLR
+        default: break;                         // external input (AVOL): not yet
     }
 }
 
@@ -124,8 +126,17 @@ Spu2::u32 Spu2::GetParam(u32 entry) const {
         case 0x0A: return c.mvolr;
         case 0x0B: return c.evoll;
         case 0x0C: return c.evolr;
+        case 0x0F: return c.bvoll;
+        case 0x10: return c.bvolr;
         default: return 0;
     }
+}
+
+void Spu2::SetInput(u32 core, const u8* data, u32 bytes) {
+    Core& c = cores_[core & 1];
+    c.input_frames = data ? bytes / 1024 * 256 : 0;
+    c.input = c.input_frames ? data : nullptr;
+    c.input_from = u64(clock_);
 }
 
 void Spu2::Start(Voice& v) {
@@ -590,6 +601,16 @@ void Spu2::Advance(u64 now_us, const std::function<void(u32 core)>& irq) {
                 const u32 index = v.counter >> 12;
                 if (crossed || index != before_index)
                     v.previous = index ? v.samples[index - 1] : last;
+            }
+            // The sound data input, into the dry mix at BVOL: frame f of the
+            // loop is at 0x400 * (f / 256) + 2 * (f % 256), left, and 0x200
+            // past it, right.
+            if (c.input) {
+                const u64 f = (u64(clock_ - samples) + n - c.input_from) % c.input_frames;
+                const u8* at = c.input + 0x400 * (f / 256) + 2 * (f % 256);
+                const s32 in_left = s16(u16(at[0] | at[1] << 8)), in_right = s16(u16(at[0x200] | at[0x201] << 8));
+                core_left += (in_left * Volume(c.bvoll)) >> 15;
+                core_right += (in_right * Volume(c.bvolr)) >> 15;
             }
             // The reverb (SD_CORE_EFFECT_ENABLE, attr bit 2): a step every
             // other sample, on the pair's first input; its output held for

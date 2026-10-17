@@ -19,9 +19,14 @@
  * output joins the core's at EVOL. The algorithm is the PS1 SPU's, which the
  * SPU2 kept (no-cash psx-spx, "SPU Reverb Formula").
  *
- * Not modelled yet: volume sweeps (a sweeping volume plays at its maximum),
- * noise, pitch modulation, and the cores' external and sound-data inputs
- * (core 0's output into core 1's reverb included).
+ * Sound data input (AutoDMA, sceSdBlockTrans): a core plays PCM a game
+ * streams into it - a looping buffer of 0x200 bytes of left samples, then
+ * 0x200 of right, 256 stereo frames each pair - at 48 kHz, into its dry mix
+ * at BVOLL/BVOLR (SD_P_BVOL*). Movies' sound comes so (Stuntman's XAVSTRM.IRX).
+ *
+ * Not modelled yet: noise, pitch modulation, the external input (AVOL), the
+ * MMIX switches (sound data goes to the dry mix), and core 0's output into
+ * core 1 (the cores are summed).
  *
  * libsd's entries (ps2sdk libsd-common.h): a voice parameter or address is
  * (param << 8) | core | voice << 1; a switch or core address (n << 8) | core.
@@ -70,6 +75,11 @@ public:
     /* Advance playback to `now_us`; `irq(core)` for each interrupt raised. */
     void Advance(u64 now_us, const std::function<void(u32 core)>& irq);
 
+    /* Sound data input: a core plays `bytes` of the AutoDMA format from
+       `data` in a loop from now (null: stopped). The memory stays the
+       caller's (IOP RAM) while it plays. */
+    void SetInput(u32 core, const u8* data, u32 bytes);
+
     /* Where the mixed output goes: interleaved 16-bit stereo at 48 kHz. */
     using Output = std::function<void(const s16* frames, u32 count)>;
     void SetOutput(Output output) { output_ = std::move(output); }
@@ -116,6 +126,10 @@ private:
         u32 endx = 0, irqa = 0, attr = 0, esa = 0, eea = 0, tsa = 0;
         u32 switches[16] = {};          // by switch number - 0x13
         u32 mvoll = 0x3FFF, mvolr = 0x3FFF;
+        u32 bvoll = 0, bvolr = 0;       // the sound data input's volume
+        const u8* input = nullptr;      // the sound data input (SetInput): its buffer,
+        u32 input_frames = 0;           // in frames (a multiple of 256)
+        u64 input_from = 0;             // the sample it started at (clock_)
         Level main_left{0x3FFF}, main_right{0x3FFF};     // MVOLL, MVOLR as they are now
         bool irq_enabled = false;
         // Reverb: the registers (libsd's order: dAPF1, dAPF2, vIIR, vCOMB1-4,

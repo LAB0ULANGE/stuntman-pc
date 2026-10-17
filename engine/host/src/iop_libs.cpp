@@ -990,12 +990,16 @@ Outcome SdBlockTrans(Vm& vm, Context& c) {
     Sound::Block& b = S().block[channel];
     if ((mode & 3) == 2) {                   // SD_TRANS_STOP
         b.active = false;
+        S().spu.SetInput(channel, nullptr, 0);
         return Ret(c, 0);
     }
     b.active = true;
     b.address = address;
     b.size = size;
     b.half = 0;
+    // A write in a loop (SD_TRANS_MODE_WRITE | SD_BLOCK_LOOP): the core
+    // plays the buffer as its sound data input (Spu2::SetInput).
+    if ((mode & 3) == 0 && (mode & 0x10)) S().spu.SetInput(channel, vm.At(address, size), size);
     const u32 bytes = (mode & 0x10) ? size / 2 : size;
     b.period_us = u64(bytes) * 1000000 / 192000;
     b.due_us = vm.NowUs() + b.period_us;
@@ -1009,6 +1013,7 @@ Outcome SdBlockTransStatus(Vm&, Context& c) {
 
 Outcome SdStopTrans(Vm&, Context& c) {
     S().block[c.r[4] & 1].active = false;
+    S().spu.SetInput(c.r[4] & 1, nullptr, 0);
     return Ret(c, 0);
 }
 
