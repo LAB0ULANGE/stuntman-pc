@@ -1926,6 +1926,24 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         gs.WriteRegister(0x47, 1u << 14);                               // TEST: DATE
         sprite(32, 60, 120, 90, 0x7F6E5D4Cu ^ colour);
         gs.WriteRegister(0x47, 0);
+        // Textured from rows 32-63 of the picture itself (a target read as a
+        // texture), with the same registers each time: the first low, the
+        // second over the texture's rows, the third reading what the second
+        // drew there (the bridge's fast path must not take the second).
+        const auto textured = [&](u32 x0, u32 y0, u32 x1, u32 y1, u32 u0, u32 v0) {
+            gs.WriteRegister(0x00, 6 | 1 << 4 | 1 << 8);                // sprite, TME, FST
+            gs.WriteRegister(0x01, 0x80808080u);
+            gs.WriteRegister(0x03, u64(u0 << 4) | u64(v0 << 4) << 16);
+            gs.WriteRegister(0x05, u64(x0 << 4) | u64(y0 << 4) << 16);
+            gs.WriteRegister(0x03, u64((u0 + x1 - x0) << 4) | u64((v0 + y1 - y0) << 4) << 16);
+            gs.WriteRegister(0x05, u64(x1 << 4) | u64(y1 << 4) << 16);
+        };
+        // TEX0: TBP the picture's row 32, TBW 2, CT32, 128x32, TCC, DECAL.
+        gs.WriteRegister(0x06, u64(fbp * 32 + 64) | u64(2) << 14 | u64(7) << 26 | u64(5) << 30 | u64(1) << 34 |
+                                   u64(1) << 35);
+        textured(0, 100, 16, 108, 0, 0);
+        textured(0, 40, 16, 48, 40, 20);                                // into texture rows 8-15
+        textured(20, 100, 36, 108, 0, 8);                               // reading them
         gs.Finish();
     };
     // The newer images in a list, the DATE setup over the batch; then the
