@@ -148,3 +148,21 @@ program", with who stored them - engine commit 26c3948). The port's
 overrides run the patched code at those three entries (`overrides.cpp`,
 checking the word in memory at each call). newlib's realloc and calloc stay
 newlib's, as on the console.
+
+## The licence movie: XAVSTRM.IRX and the IPU's IDEC (to do)
+
+After the language select the game plays `MOVIES\LICENSE.XAV`, which is no
+file of the disc's own: the name sent to XAVSTRM.IRX (RPC 0x7F7F7F7F, client
+`0x00204010`, called from `0x00170B38`) carries its place in STUNTMAN.IMG,
+which the module parses (strstr ";" then strtoul) before sceCdSearchFile
+finds STUNTMAN.IMG. The module streams the sectors (sceCdRead from IOP
+thread 8, sceCdCallback), waits for SIF software register 31 from the EE
+before it starts (sceSifGetSreg), plays the sound through libsd block
+transfers, and sends the video data to the EE by SIF commands.
+
+The EE decodes the pictures with the IPU's **IDEC** (a whole intra slice
+to RGB, EE User's Manual 8.3), which the host does not model yet
+(`[ipu] IDEC is not modelled`, the command ends at once): the movie is
+black for ~170 frames (~380-550 in `language_fr`), then the title screen
+comes. To do: IDEC in `engine/host/src/ipu.cpp`, a macroblock a step,
+from BDEC's Block/Idct and CSC; then `language_fr`'s CRCs.
