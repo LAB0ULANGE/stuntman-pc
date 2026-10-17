@@ -282,6 +282,13 @@ void SendCmdToEe(u32 command, const std::vector<u8>& fields, u32 dest, const std
 
 void DelayRpcReply(u64 ns) { I().next_delay_ns = ns; }
 
+u32 SoftwareRegister(u32 index) {
+    const auto found = I().sregs.find(index);
+    return found == I().sregs.end() ? 0 : found->second;
+}
+
+void SetSoftwareRegister(u32 index, u32 value) { I().sregs[index] = value; }
+
 // Deliver one queued answer: into the EE's receive buffer, then the SIF0 DMA
 // interrupt. False when none is waiting - or the first is not due yet (the
 // IOP answers in order: nothing overtakes it).

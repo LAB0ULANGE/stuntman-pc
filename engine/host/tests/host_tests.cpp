@@ -1643,6 +1643,23 @@ void IopSearchesTheDisc() {
     Check(call(37, {0}) == handler, "sceCdCallback(0) gives it back and removes it");
     vm.Write(seen, 0xFFFFFFFFu, 4);
     Check(call(14, {2, seen}) == 1 && vm.Read(seen, 4) == 0, "sceCdTrayReq: the tray never moved");
+
+    // The SIF software registers: the EE sets one (command 0x80000001,
+    // sceSifSetSreg), a module reads it with sceSifGetSreg and sets it too.
+    auto sifcmd = [&](u32 index, std::vector<u32> args) {
+        Context c;
+        for (std::size_t i = 0; i < args.size(); ++i) c.r[4 + i] = args[i];
+        FindLibrary("sifcmd", index)(vm, c);
+        return c.r[2];
+    };
+    Check(sifcmd(6, {30}) == 0, "sceSifGetSreg: 0 until set");
+    std::vector<u32> sreg(8, 0);
+    sreg[2] = 0x80000001u;
+    sreg[4] = 30;
+    sreg[5] = 0x1234u;
+    SendSifPacket(sreg);
+    Check(sifcmd(6, {30}) == 0x1234u, "sceSifGetSreg reads what the EE set");
+    Check(sifcmd(7, {30, 0}) == 0x1234u && sifcmd(6, {30}) == 0, "sceSifSetSreg sets it, giving the value before");
     ps2host::GuestDisc().Use({});
 }
 

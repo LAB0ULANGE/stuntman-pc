@@ -851,7 +851,15 @@ Outcome CdMmode(Vm&, Context& c) { return Ret(c, 1); }
 
 Outcome FlushDcache(Vm&, Context& c) { return Ret(c, 0); }
 Outcome CheckInit(Vm&, Context& c) { return Ret(c, 1); }
-Outcome GetSreg(Vm&, Context& c) { return Ret(c, 0); }
+// sceSifGetSreg(index), sceSifSetSreg(index, value): the SIF software
+// registers the EE sets with command 0x80000001 - a module waiting on one
+// polls it (Stuntman's XAVSTRM.IRX on 31, as its movie starts).
+Outcome GetSreg(Vm& vm, Context& c) { return Ret(c, SoftwareRegister(A(vm, c, 0))); }
+Outcome SetSreg(Vm& vm, Context& c) {
+    const u32 index = A(vm, c, 0), before = SoftwareRegister(index);
+    SetSoftwareRegister(index, A(vm, c, 1));
+    return Ret(c, before);
+}
 
 // ---------------------------------------------------------------- libsd
 
@@ -1095,7 +1103,7 @@ const Map& Table() {
         {{"sifman", 5}, Succeed}, {{"sifman", 7}, SetDma}, {{"sifman", 8}, DmaStat},
         {{"sifman", 29}, CheckInit},
         {{"sifcmd", 4}, Succeed}, {{"sifcmd", 5}, Succeed}, {{"sifcmd", 6}, GetSreg},
-        {{"sifcmd", 7}, Succeed}, {{"sifcmd", 8}, SetCmdBuffer}, {{"sifcmd", 9}, Succeed},
+        {{"sifcmd", 7}, SetSreg}, {{"sifcmd", 8}, SetCmdBuffer}, {{"sifcmd", 9}, Succeed},
         {{"sifcmd", 10}, AddCmdHandler}, {{"sifcmd", 11}, RemoveCmdHandler},
         {{"sifcmd", 12}, SendCmd}, {{"sifcmd", 13}, SendCmd}, {{"sifcmd", 14}, Succeed},
         {{"sifcmd", 17}, RegisterRpc}, {{"sifcmd", 19}, SetRpcQueue}, {{"sifcmd", 22}, RpcLoop},

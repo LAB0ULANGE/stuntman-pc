@@ -135,6 +135,10 @@ void QueueIopPacket(std::vector<u8> packet);
    `fields` - for the EE's handler of `command`. Sent while a server answers an
    RPC call, it follows that call's RPC end. */
 void SendCmdToEe(u32 command, const std::vector<u8>& fields, u32 dest, const std::vector<u8>& data);
+/* The SIF software registers (sceSifGetSreg, sceSifSetSreg): set by the EE
+   with command 0x80000001, read and set by IOP modules. 0 until set. */
+u32 SoftwareRegister(u32 index);
+void SetSoftwareRegister(u32 index, u32 value);
 /* A host RPC server's: its answer (the RPC end) reaches the EE `ns` later, on
    the host clock (virtual under --virtual-time) - a device's time, such as a
    CD read's. */
