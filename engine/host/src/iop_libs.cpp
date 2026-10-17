@@ -20,6 +20,7 @@
  * A function the host lacks stops the run with its name (iop_vm.cpp).
  */
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -782,6 +783,33 @@ Outcome CdGetDiskType(Vm&, Context& c) {                          // SCECdPS2CD,
     return Ret(c, GuestDisc().IsCd() ? 0x12 : 0x14);
 }
 Outcome CdDiskReady(Vm&, Context& c) { return Ret(c, 2); }         // SCECdComplete
+// sceCdSearchFile(sceCdlFILE* fp, const char* name): the file's place on the
+// disc, in fp = { u32 lsn; u32 size; char name[16]; u8 date[8]; }. The name as
+// a module writes it, "\MOVIES\INTRO.XAV;1" - here a device ("cdrom0:")
+// before it is skipped, case does not matter and ";1" may be left out
+// (Disc::Find). fp's name is the directory record's identifier, its date the
+// record's as cdvdman lays it out: [1] second, [2] minute, [3] hour, [4] day,
+// [5] month, [6..7] the year (TO RECHECK against a console's: XAVSTRM reads
+// the lsn and size). 1: found, 0: not.
+Outcome CdSearchFile(Vm& vm, Context& c) {
+    const u32 fp = A(vm, c, 0);
+    std::string name = vm.String(A(vm, c, 1));
+    const auto colon = name.find(':');
+    if (colon != std::string::npos) name.erase(0, colon + 1);
+    Disc::File file;
+    if (!GuestDisc().IsOpen() || !GuestDisc().Find(name, &file) || file.name.empty()) return Ret(c, 0);
+    u8* out = vm.At(fp, 32);
+    std::memset(out, 0, 32);
+    std::memcpy(out, &file.lsn, 4);
+    std::memcpy(out + 4, &file.size, 4);
+    std::memcpy(out + 8, file.name.data(), std::min<std::size_t>(file.name.size(), 15));
+    const u32 year = 1900u + file.date[0];
+    const u8 date[8] = {0, file.date[5], file.date[4], file.date[3], file.date[2], file.date[1],
+                        u8(year), u8(year >> 8)};
+    std::memcpy(out + 24, date, 8);
+    return Ret(c, 1);
+}
+
 // sceCdMmode(media): the media the drive is told to expect (CD, DVD); the host
 // reads the disc image as it is. 1: done.
 Outcome CdMmode(Vm&, Context& c) { return Ret(c, 1); }
@@ -1038,7 +1066,7 @@ const Map& Table() {
         {{"sifcmd", 17}, RegisterRpc}, {{"sifcmd", 19}, SetRpcQueue}, {{"sifcmd", 22}, RpcLoop},
         {{"sifman", 32}, SetDmaIntr},
         {{"cdvdman", 4}, Succeed}, {{"cdvdman", 6}, CdRead}, {{"cdvdman", 8}, CdGetError},
-        {{"cdvdman", 11}, CdSync}, {{"cdvdman", 12}, CdGetDiskType}, {{"cdvdman", 13}, CdDiskReady},
+        {{"cdvdman", 10}, CdSearchFile}, {{"cdvdman", 11}, CdSync}, {{"cdvdman", 12}, CdGetDiskType}, {{"cdvdman", 13}, CdDiskReady},
         {{"cdvdman", 75}, CdMmode},
         {{"thfpool", 4}, CreateFpl}, {{"thfpool", 5}, DeleteFpl}, {{"thfpool", 6}, AllocateFpl},
         {{"thfpool", 7}, PollAllocateFpl}, {{"thfpool", 8}, PollAllocateFpl}, {{"thfpool", 9}, FreeFpl},

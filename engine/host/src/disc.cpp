@@ -185,6 +185,8 @@ bool Disc::Find(const std::string& path, File* out) {
             if (name_length > 1 || (name_length == 1 && name[0] > 1)) {
                 if (Bare(name) == part) {
                     directory = File{Le32(&data[at + 2]), Le32(&data[at + 10])};
+                    directory.name = name;
+                    std::memcpy(directory.date, &data[at + 18], 7);
                     found = true;
                     break;
                 }

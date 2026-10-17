@@ -1585,6 +1585,45 @@ const CpuVector kCpuVectors[] = {
 #include "iop_cpu_vectors.inc"
 };
 
+// cdvdman's sceCdSearchFile: a file's place on the disc, its name as a module
+// writes it - a device before it, any case, ";1" or not - into sceCdlFILE.
+void IopSearchesTheDisc() {
+    using namespace ps2host::iop;
+    using ps2host::kSectorSize;
+    std::vector<u8> image(24 * kSectorSize, 0);
+    u8* pvd = &image[16 * kSectorSize];
+    pvd[0] = 1;
+    std::memcpy(pvd + 1, "CD001", 5);
+    Record(image, 16 * kSectorSize + 156, 20, kSectorSize, 2, std::string(1, '\0'));
+    u32 at = 20 * kSectorSize;
+    Record(image, at, 20, kSectorSize, 2, std::string(1, '\0')); at += 34;
+    Record(image, at, 20, kSectorSize, 2, std::string(1, '\1')); at += 34;
+    Record(image, at, 21, kSectorSize, 2, "MOVIES");
+    Record(image, 21 * kSectorSize, 23, 0x12345, 0, "LICENSE.XAV;1");
+    const u8 date[7] = {102, 9, 14, 13, 45, 30, 0};          // 2002-09-14 13:45:30
+    std::memcpy(&image[21 * kSectorSize + 18], date, 7);
+    ps2host::GuestDisc().Use(image);
+    Vm& vm = TheVm();
+    const u32 fp = 0x001F0000u, name = 0x001F0100u;
+    auto search = [&](const std::string& path) {
+        for (u32 i = 0; i <= path.size(); ++i) vm.Write(name + i, i < path.size() ? u8(path[i]) : 0, 1);
+        for (u32 i = 0; i < 32; i += 4) vm.Write(fp + i, 0xFFFFFFFFu, 4);
+        Context c;
+        c.r[4] = fp;
+        c.r[5] = name;
+        FindLibrary("cdvdman", 10)(vm, c);
+        return c.r[2];
+    };
+    Check(search("cdrom0:\\MOVIES\\LICENSE.XAV;1") == 1 && vm.Read(fp, 4) == 23 && vm.Read(fp + 4, 4) == 0x12345,
+          "sceCdSearchFile finds a file, a device before its name");
+    Check(std::string(reinterpret_cast<const char*>(vm.At(fp + 8, 16))) == "LICENSE.XAV;1" &&
+              vm.Read(fp + 24, 4) == 0x0D2D1E00u && vm.Read(fp + 28, 4) == 0x07D2090Eu,
+          "sceCdlFILE: the record's name and date");
+    Check(search("\\movies\\license.xav") == 1 && vm.Read(fp, 4) == 23, "any case, no version");
+    Check(search("cdrom0:\\MOVIES\\MISSING.XAV;1") == 0, "a missing file: 0");
+    ps2host::GuestDisc().Use({});
+}
+
 // The IOP library functions Stuntman's XAVSTRM.IRX needs beyond the rest
 // (iop_libs.cpp): thfpool's fixed-size pools - blocks handed out, a thread
 // waiting for one as WaitSema waits and woken with the block FreeFpl frees,
@@ -1816,6 +1855,7 @@ int main() {
     IpuDecodesAndRetriesCleanly();
     IopInstructionsMatchTheR5900();
     IopPoolsAndLibraryCalls();
+    IopSearchesTheDisc();
     SpuDecodesAdpcmAndPlaysAVoice();
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;

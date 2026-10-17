@@ -27,6 +27,8 @@ public:
     struct File {
         u32 lsn = 0;        // first sector
         u32 size = 0;       // bytes
+        std::string name;   // its directory record's identifier ("CARS.BIN;1"); "" for the root
+        u8 date[7] = {};    // the record's: years since 1900, month, day, hour, minute, second, GMT offset
     };
 
     ~Disc();
