@@ -2222,7 +2222,25 @@ void VulkanGsRenderer::UploadDepth(std::uint32_t zbp, std::uint32_t width, std::
 
 void VulkanGsRenderer::DrawTriangles(const GsDrawState& state, const GsVertex* v, std::size_t count) {
     if (!SameBatch(state, state_)) {
-        if (CountingBreaks() && !pending_.empty()) g_flush_why = BreakReason(state, state_);
+        if (CountingBreaks() && !pending_.empty()) {
+            g_flush_why = BreakReason(state, state_);
+            if (state.textured != state_.textured) {
+                // What else differs, the texture's state set aside (Stuntman:
+                // the alpha test, its untextured primitives ATST NEVER with
+                // AFAIL FB_ONLY between its textured GREATER ones).
+                GsDrawState t = state;
+                t.textured = state_.textured;
+                t.texture = state_.texture;
+                t.tfx = state_.tfx; t.tcc = state_.tcc; t.bilinear = state_.bilinear; t.mip = state_.mip;
+                t.wms = state_.wms; t.wmt = state_.wmt; t.minu = state_.minu; t.maxu = state_.maxu;
+                t.minv = state_.minv; t.maxv = state_.maxv; t.tw = state_.tw; t.th = state_.th;
+                t.texture_target = state_.texture_target; t.tex_fbp = state_.tex_fbp; t.tex_fbw = state_.tex_fbw;
+                t.tex_target_psm = state_.tex_target_psm; t.tex_format = state_.tex_format;
+                t.ta0 = state_.ta0; t.ta1 = state_.ta1; t.aem = state_.aem;
+                static std::set<std::string> names;
+                g_flush_why = names.insert(std::string("textured on/off; then ") + BreakReason(t, state_)).first->c_str();
+            }
+        }
         Flush();
     }
     // A primitive sampling the target it draws into, where the batch has
