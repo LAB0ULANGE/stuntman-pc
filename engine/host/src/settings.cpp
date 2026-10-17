@@ -7,6 +7,7 @@
 #include "ps2host/settings.h"
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -73,5 +74,14 @@ void SetSetting(const std::string& key, const std::string& value) {
 }
 
 void SetSettingOn(const std::string& key, bool on) { SetSetting(key, on ? "on" : "off"); }
+
+std::vector<std::string> PlaySettingArguments() {
+    std::vector<std::string> arguments;
+    if (SettingOn("vu_record")) {
+        const std::filesystem::path beside = std::filesystem::path(SettingsPath()).parent_path();
+        arguments = {"--vu-interpret", "--vu-record", (beside / "vu_programs.txt").string()};
+    }
+    return arguments;
+}
 
 }  // namespace ps2host

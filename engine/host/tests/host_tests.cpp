@@ -29,6 +29,7 @@
 #include "ps2host/vif.h"
 #include "ps2host/path3.h"
 #include "ps2host/run.h"
+#include "ps2host/settings.h"
 #include "ps2host/texture_pack.h"
 #include "ps2host/vu.h"
 #include "ps2host/vu_core.h"
@@ -1722,6 +1723,26 @@ const CpuVector kCpuVectors[] = {
 #include "iop_cpu_vectors.inc"
 };
 
+// vu_record=on in the PC settings: a played run records the vector units'
+// microprograms beside the settings, interpreted meanwhile; nothing added
+// otherwise.
+void PlaySettingsRecordVuPrograms() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps2host_tests_settings";
+    std::filesystem::create_directories(dir);
+    ps2host::LoadSettings((dir / "pc_settings.ini").string());
+    const bool none = ps2host::PlaySettingArguments().empty();
+    ps2host::SetSettingOn("vu_record", true);
+    const std::vector<std::string> on = ps2host::PlaySettingArguments();
+    ps2host::SetSettingOn("vu_record", false);
+    const bool off = ps2host::PlaySettingArguments().empty();
+    ps2host::LoadSettings("");
+    std::filesystem::remove_all(dir);
+    Check(none && off, "the PC settings add no run option unless asked");
+    Check(on.size() == 3 && on[0] == "--vu-interpret" && on[1] == "--vu-record" &&
+              std::filesystem::path(on[2]) == dir / "vu_programs.txt",
+          "vu_record=on: the microprograms recorded beside the settings, interpreted meanwhile");
+}
+
 // cdvdman's sceCdSearchFile: a file's place on the disc, its name as a module
 // writes it - a device before it, any case, ";1" or not - into sceCdlFILE.
 void IopSearchesTheDisc() {
@@ -2051,6 +2072,7 @@ int main() {
     IopInstructionsMatchTheR5900();
     IopPoolsAndLibraryCalls();
     IopSearchesTheDisc();
+    PlaySettingsRecordVuPrograms();
     SpuDecodesAdpcmAndPlaysAVoice();
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;

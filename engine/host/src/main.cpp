@@ -120,8 +120,12 @@ std::vector<std::string> PlayArguments(const char* self) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a run ended by force loses nothing
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     std::fprintf(stderr, "[port] disc %s\n", disc.c_str());
-    return {self, "--disc", disc, "--memcard", (here / "memcard").string(), "--window", "--gpu",
-            "--audio", "--timeout", "315360000"};     // ten years
+    std::vector<std::string> arguments = {self, "--disc", disc, "--memcard", (here / "memcard").string(),
+                                          "--window", "--gpu", "--audio", "--timeout", "315360000"};  // ten years
+    for (const std::string& extra : ps2host::PlaySettingArguments()) arguments.push_back(extra);
+    for (std::size_t i = 1; i < arguments.size(); ++i) std::fprintf(stderr, i == 1 ? "[port] %s" : " %s", arguments[i].c_str());
+    std::fprintf(stderr, "\n");
+    return arguments;
 #else
     return {self};
 #endif

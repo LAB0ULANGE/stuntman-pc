@@ -9,6 +9,7 @@
 #define PS2HOST_SETTINGS_H
 
 #include <string>
+#include <vector>
 
 namespace ps2host {
 
@@ -24,6 +25,15 @@ bool SettingOn(const std::string& key, bool fallback = false);
 /* Sets one and writes the file. */
 void SetSetting(const std::string& key, const std::string& value);
 void SetSettingOn(const std::string& key, bool on);
+
+/* The run options the settings add when the port is played (started with no
+   arguments, main.cpp). vu_record=on: the vector units' microprograms the
+   game runs are recorded into vu_programs.txt beside the settings
+   (--vu-record, added to at each run), for the port's next build to compile
+   (port.py, vurecomp.py) - interpreted meanwhile (--vu-interpret), so that
+   every jump is seen; slower while it is on. A program never recorded runs
+   in the interpreter in any build. */
+std::vector<std::string> PlaySettingArguments();
 
 }  // namespace ps2host
 
