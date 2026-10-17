@@ -74,10 +74,27 @@ def dispatch_source(addresses, names: dict, untranslated=(), sizes=None) -> str:
     return "\n".join(lines)
 
 
-def discovered_functions(game, path: str) -> dict:
+def read_discoveries(paths) -> set:
+    """The (run address, source address) pairs in the discovery files that
+    exist: the build's (what runs found, --discover) and the port's own,
+    committed beside its sources (port/discovered.txt) - so a clean build
+    translates what earlier runs found, without finding it again a run at a
+    time."""
+    pairs = set()
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as handle:
+            pairs |= {(int(run, 16), int(source, 16)) for run, source in
+                      (line.split()[:2] for line in handle if line.strip() and not line.startswith("#"))}
+    return pairs
+
+
+def discovered_functions(game, paths) -> dict:
     """{run address: C++} for the code runs found copied at run time, translated
     at their run addresses from the executable's bytes."""
-    if not os.path.exists(path):
+    pairs = read_discoveries([paths] if isinstance(paths, str) else paths)
+    if not pairs:
         return {}
     elf = game.load_elf()
     section = elf.exec_sections[0]
@@ -87,9 +104,6 @@ def discovered_functions(game, path: str) -> dict:
     lift.use_sections([(image, section.addr)] + [(elf.section_data(s), s.addr) for s in elf.sections
                                                   if s.is_alloc and s.size and s is not section and s.type != 8])
     found = {}
-    with open(path, encoding="utf-8") as handle:
-        pairs = {(int(run, 16), int(source, 16)) for run, source in
-                 (line.split() for line in handle if line.strip())}
     # The source may lie outside .text: Stuntman copies kernel extensions from .data.
     loaded = [(elf.section_data(s), s.addr) for s in elf.sections
               if s.is_alloc and s.size and s.type != 8]
@@ -119,8 +133,7 @@ def generate(game) -> str:
                     if f["size"] and f["addr"] not in set(addresses)]
     out = game.path(os.path.join(game.build, "port", "generated"))
     os.makedirs(out, exist_ok=True)
-    discovered = discovered_functions(game, game.path(os.path.join(game.build, "port",
-                                                                   "discovered.txt")))
+    discovered = discovered_functions(game, [committed_discoveries_path(game), discoveries_path(game)])
     # What the analysis has since found is translated - and verified - with the rest.
     discovered = {a: v for a, v in discovered.items() if a not in set(addresses)}
     copies = ['#include "ps2rt/lifted.h"', "", "using namespace generated;",
@@ -200,6 +213,10 @@ def build(game, generated: str) -> str:
 
 def discoveries_path(game) -> str:
     return game.path(os.path.join(game.build, "port", "discovered.txt"))
+
+
+def committed_discoveries_path(game) -> str:
+    return game.path(os.path.join("port", "discovered.txt"))
 
 
 def run(game, executable: str, extra) -> int:
