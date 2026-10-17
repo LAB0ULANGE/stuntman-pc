@@ -385,6 +385,33 @@ void Gs::Draw() {
             return;
         }
     }
+    // The bands share rows of the screen out: a queued primitive writing the
+    // same memory through another layout (another base, width or format)
+    // reaches it from other rows, on another thread - in no order. It goes
+    // first.
+    if (!jobs_.empty()) {
+        struct Area { u32 begin, end, bp, bw, psm; bool used; };
+        const auto areas = [](const Setup& x, Area out[2]) {
+            out[0] = {x.fbp, x.frame_end, x.fbp, x.fbw, x.fpsm, true};
+            out[1] = {x.zbp, x.z_end, x.zbp, x.fbw, x.zpsm, x.zte || !x.zmsk};
+        };
+        Area mine[2];
+        areas(s, mine);
+        for (const Job& queued : jobs_) {
+            Area theirs[2];
+            areas(queued.s, theirs);
+            bool apart = true;
+            for (const Area& a : mine)
+                for (const Area& b : theirs)
+                    if (a.used && b.used && a.begin < b.end && b.begin < a.end &&
+                        (a.bp != b.bp || a.bw != b.bw || a.psm != b.psm))
+                        apart = false;
+            if (!apart) {
+                FinishJobs();
+                break;
+            }
+        }
+    }
     jobs_.push_back(job);
     if (jobs_.size() >= kBatchPrimitives) FinishJobs();
 }

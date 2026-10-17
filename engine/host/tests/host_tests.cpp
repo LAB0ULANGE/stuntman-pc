@@ -470,6 +470,32 @@ void GsDrawsASprite() {
     Check(gs.primitives() == 1 && gs.pixels_drawn() == 8, "one sprite of 4x2 pixels");
 }
 
+// Primitives drawn in bands of rows on several threads: one over the same
+// memory through another width (the rows of one are other rows of the
+// other) still lands after the one before it.
+void GsDrawsInOrderAcrossWidths() {
+    using namespace ps2host::gs;
+    bool right = true;
+    for (int run = 0; run < 20 && right; ++run) {
+        Gs gs;
+        const auto sprite = [&](u32 fbw, u32 x0, u32 y0, u32 x1, u32 y1, u32 rgba) {
+            gs.WriteRegister(0x4C, u64(0x10) | u64(fbw) << 16 | u64(PSMCT32) << 24);
+            gs.WriteRegister(0x00, 6);
+            gs.WriteRegister(0x01, rgba);
+            gs.WriteRegister(0x05, u64(x0 << 4) | u64(y0 << 4) << 16);
+            gs.WriteRegister(0x05, u64(x1 << 4) | u64(y1 << 4) << 16);
+        };
+        gs.WriteRegister(0x40, u64(127) << 16 | u64(255) << 48);       // SCISSOR 128x256
+        sprite(1, 16, 8, 48, 48, 0x55667788u);                          // 64 wide: page 1 at rows 32-63
+        sprite(2, 60, 4, 100, 20, 0x99AABBCCu);                         // 128 wide: page 1 at columns 64-127
+        sprite(2, 0, 128, 128, 256, 0x01020304u);                       // enough pixels to share out
+        gs.Finish();
+        right = gs.memory.Read(0x200, 2, 80, 4, PSMCT32) == 0x99AABBCCu &&
+                gs.memory.Read(0x200, 1, 16, 32, PSMCT32) == 0x55667788u;
+    }
+    Check(right, "GS: a primitive over the same memory at another width lands after the one before");
+}
+
 // Field mode (SMODE2 INT and FFMD) shows a 256-line field for a 512-line
 // picture: alone, each line twice; woven, on the lines of its parity, the
 // field before on the others - as a television interlaces them.
@@ -2236,6 +2262,7 @@ int main() {
     CodePatchesAreFound();
     GsLayoutsArePermutations();
     GsDrawsASprite();
+    GsDrawsInOrderAcrossWidths();
     GsWeavesFieldsAsATelevision();
     GsFogsTowardsFogcol();
     GsLoadsACsm2Clut();
