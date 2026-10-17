@@ -20,6 +20,11 @@
 #include "ps2host/memory.h"
 #include "ps2host/run.h"
 
+// The translated originals, which stay callable (port.py's dispatch.cpp).
+void F_00251FE0(lifted::Context& c);
+void F_002521E0(lifted::Context& c);
+void F_00252208(lifted::Context& c);
+
 namespace {
 
 std::string GuestString(u32 address, std::size_t limit = 4096) {
@@ -131,12 +136,77 @@ void GuestPrintf(lifted::Context& c) {
     c.r[2] = u64(s64(s32(out.size())));                     // printf's result: the characters
 }
 
+// newlib's malloc, memalign and free, as the game patches them. At start-up
+// 0x00102860 (the game heap's set-up, from the entry) has 0x001027A8 write a
+// jump over the call each makes into newlib's allocator (FINDINGS.md):
+//   0x002521F4 malloc    jal _malloc_r 0x00252470   -> jal 0x001027E0
+//   0x00251FF8 memalign  jal _memalign_r 0x00252010 -> jal 0x00102810
+//   0x00252210 free      j _free_r 0x002513F0       -> j 0x00102838
+// so every block comes from, and goes back to, the game's allocator
+// (0x00102360, 0x00102638). The translation is the executable's, unpatched:
+// these run the patched code, instruction for instruction - the word in memory
+// read at each call. Before the patch they run the original; a word that is
+// neither stops the run rather than guess.
+constexpr u32 kImpurePtr = 0x0027919Cu;      // _impure_ptr, newlib's reentrancy struct
+
+bool Patched(u32 at, u32 patched, u32 original) {
+    const u32 word = u32(ps2host::GuestMemory().Read(at, 4));
+    if (word == patched) return true;
+    if (word == original) return false;
+    char text[160];
+    std::snprintf(text, sizeof text, "newlib's allocator call at 0x%08X is 0x%08X, neither the executable's "
+                  "(0x%08X) nor the game's patch (0x%08X)", unsigned(at), unsigned(word), unsigned(original),
+                  unsigned(patched));
+    throw ps2host::Unimplemented{text};
+}
+
+u64 ImpurePtr() { return u64(s64(s32(u32(ps2host::GuestMemory().Read(kImpurePtr, 4))))); }
+
+// The frame malloc and memalign keep: $ra saved at $sp, 16 bytes.
+void CallFramed(lifted::Context& c, u32 target, u32 return_address) {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    c.r[29] -= 0x10;
+    m.Write(u32(c.r[29]), c.r[31], 8);
+    lifted::Call(c, target, return_address);
+    c.r[31] = m.Read(u32(c.r[29]), 8);
+    c.r[29] += 0x10;
+}
+
+void PatchedMalloc(lifted::Context& c) {                     // 0x002521E0
+    if (!Patched(0x002521F4u, 0x0C0409F8u, 0x0C09491Cu)) return F_002521E0(c);
+    c.r[5] = c.r[4];
+    c.r[2] = 0x00280000u;
+    c.r[4] = ImpurePtr();
+    CallFramed(c, 0x001027E0u, 0x002521FCu);
+}
+
+void PatchedMemalign(lifted::Context& c) {                   // 0x00251FE0
+    if (!Patched(0x00251FF8u, 0x0C040A04u, 0x0C094804u)) return F_00251FE0(c);
+    c.r[2] = c.r[4];
+    c.r[3] = 0x00280000u;
+    c.r[6] = c.r[5];
+    c.r[4] = ImpurePtr();
+    c.r[5] = c.r[2];
+    CallFramed(c, 0x00102810u, 0x00252000u);
+}
+
+void PatchedFree(lifted::Context& c) {                       // 0x00252208, a jump: $ra stays the caller's
+    if (!Patched(0x00252210u, 0x08040A0Eu, 0x080944FCu)) return F_00252208(c);
+    c.r[5] = c.r[4];
+    c.r[2] = 0x00280000u;
+    c.r[4] = ImpurePtr();
+    lifted::Call(c, 0x00102838u);
+}
+
 }  // namespace
 
 void RegisterGameOverrides() {
     // ps2host::Override(0x00123456u, SomeHook, "what it does and why");
 
     ps2host::Override(0x00253020u, GuestPrintf, "printf: the game's messages to the log as [guest] lines");
+    ps2host::Override(0x002521E0u, PatchedMalloc, "malloc, as the game patches it: its own allocator");
+    ps2host::Override(0x00251FE0u, PatchedMemalign, "memalign, as the game patches it: its own allocator");
+    ps2host::Override(0x00252208u, PatchedFree, "free, as the game patches it: its own allocator");
 
     // The game's own IOP modules run in the IOP interpreter (PORTING.md):
     // XAVSTRM.IRX ("xavstr v1.1") serves RPC 0x7F7F7F7F, whose client

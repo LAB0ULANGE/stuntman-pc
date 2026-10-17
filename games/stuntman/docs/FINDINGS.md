@@ -118,3 +118,33 @@ RotateThreadReadyQueue, SuspendThread from interrupts): asleep on its
 semaphore by design. `*0x0026F4F4` -> `0x01FE6FE8`, a 64-bit value
 (0x01139AB2 at frame 2006) the main loop `0x00119600` compares with 0x90 and
 0x8732B. The pad is opened (port 0 slot 0, area `0x005CBA40`).
+
+## The crash at Cross: newlib's malloc, memalign and free, patched
+
+Choosing a language crashed in newlib's `_free_r` (0x002513F0), unlinking a
+"free neighbour" whose links were the text "TSD-COMP": `0x00200938` frees
+`*(0x00273178)`, the buffer of `FRONTEND\MEDIA\LANG\GRAPHICS\LANG.TSC`,
+which `LoadFile` (0x001CD108) took from the game's own allocator
+(`0x00102360`, a 0x20-byte record before the data) - not from malloc. The
+original code, run in the reference interpreter on the RAM of that frame,
+faults the same way: the translation was faithful, to the executable.
+
+But not to the code the console runs. At start-up the game heap's set-up
+`0x00102860` (from the entry) patches three words of newlib with
+`0x001027A8` (new = (old & 0xFFFFFF) - (old target - new target) / 4 | op << 24):
+
+| word | in | executable | patched |
+| --- | --- | --- | --- |
+| 0x002521F4 | malloc 0x002521E0 | `jal 0x00252470` (_malloc_r) | `jal 0x001027E0` |
+| 0x00251FF8 | memalign 0x00251FE0 | `jal 0x00252010` (_memalign_r) | `jal 0x00102810` |
+| 0x00252210 | free 0x00252208 | `j 0x002513F0` (_free_r) | `j 0x00102838` |
+
+`0x001027E0` is alloc(size, align 16, -1, name) through `0x00102360`,
+`0x00102810` the same with the alignment asked, `0x00102838` frees through
+`0x00102638`. Every malloc of the game is its allocator's. Before the first
+VSync, before any call to them. Found by comparing `.text` in a RAM dump
+with the ELF; the host now reports such words itself ("code changed by the
+program", with who stored them - engine commit 26c3948). The port's
+overrides run the patched code at those three entries (`overrides.cpp`,
+checking the word in memory at each call). newlib's realloc and calloc stay
+newlib's, as on the console.
