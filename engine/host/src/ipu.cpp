@@ -245,7 +245,7 @@ public:
     bool busy = false;
     u32 left = 0;                       // CSC and PACK: macroblocks still to do
     bool idec_started = false;          // IDEC: past its FB and first macroblock
-    bool idec_slice = false;            // IDEC: a slice header just read, the DC to reset
+    bool idec_reset = false;            // IDEC: the DC predictors to reset at the next macroblock
     u32 idec_qsc = 0;                   // IDEC: the quantiser_scale_code now
 
     // The channels.
@@ -491,7 +491,7 @@ public:
         }
         if (code == 1) {                                // IDEC: the slice's quantiser_scale_code
             idec_started = false;
-            idec_slice = false;
+            idec_reset = false;
             idec_qsc = (word >> 16) & 0x1F;
             if ((word >> 25) & 1) Note("ipu idec sgn", "IPU: IDEC with SGN set (no offset applied) - TO RECHECK");
         }
@@ -708,30 +708,38 @@ public:
         return false;
     }
 
-    /* IDEC, one macroblock: macroblock_address_increment (stuffing, escapes),
-       macroblock_type (B.2: intra, intra + quant), dct_type when DTD asks,
-       quantiser_scale_code with quant, six intra blocks - then to RGB as CSC
-       does, by OFM and DTE. The DC predictors are reset at each slice's start
-       and where macroblocks are skipped (an increment above 1, 7.2.1). A game
-       gives one IDEC a picture, its first slice's header skipped by FB and
-       QSC its quantiser_scale_code: the slices after it are IDEC's own
-       (PictureEnds), and the command ends at the next other start code, SCD
-       set. Parsed whole before anything is kept, a step being all or
-       nothing. */
-    void Idec(Reader& r) {
-        const bool first = !idec_started || idec_slice;
-        if (!idec_started) r.Skip(Fb());
+    /* macroblock_address_increment (B.1, stuffing and escapes added up), or
+       0 for no such code. */
+    u32 AddressIncrementOf(Reader& r) {
         u32 increment = 0;
         for (;;) {
             u32 length = 0;
             const s32 value = r.Vlc(AddressIncrement(), &length);
-            if (!length) { ctrl |= 1u << 14; busy = false; return; }
+            if (!length) return 0;
             if (value == 0x22) continue;                 // stuffing (MPEG-1)
             if (value == 0x23) { increment += 33; continue; }
-            increment += u32(value);
-            break;
+            return increment + u32(value);
         }
-        if (first || increment > 1) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128 << ((ctrl >> 16) & 3);
+    }
+
+    /* IDEC, one macroblock: macroblock_type (B.2: intra, intra + quant),
+       dct_type when DTD asks, quantiser_scale_code with quant, six intra
+       blocks - then to RGB as CSC does, by OFM and DTE - and after it the
+       next macroblock's address increment. The first macroblock's increment
+       is the caller's (in FB, or read with VDEC): a game gives one IDEC a
+       picture, from just past its first slice's header and first increment,
+       QSC that slice's quantiser_scale_code. Stuntman's XAV movies decode
+       only so (GAMEINTR.XAV's first picture: 1120 macroblocks to the end of
+       its data, and with an increment read first, not one). The slices after
+       the first are IDEC's own (PictureEnds): their header, then their first
+       macroblock's increment. The DC predictors are reset at the picture's
+       and each slice's start, and where macroblocks are skipped (an increment
+       above 1, 7.2.1). The command ends at a start code that is not a
+       slice's, SCD set. Parsed whole before anything is kept, a step being
+       all or nothing. */
+    void Idec(Reader& r) {
+        if (!idec_started) r.Skip(Fb());
+        if (!idec_started || idec_reset) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128 << ((ctrl >> 16) & 3);
         u32 length = 0;
         const s32 type = r.Vlc(MacroblockType(1), &length);
         if (!length) { ctrl |= 1u << 14; busy = false; return; }
@@ -759,9 +767,17 @@ public:
         }
         ctrl &= ~(1u << 15);
         bool slice = false;
-        const bool ends = PictureEnds(r, &qsc, &slice);
+        bool ends = PictureEnds(r, &qsc, &slice);
+        u32 increment = 1;
+        if (!ends) {
+            increment = AddressIncrementOf(r);
+            if (!increment) {                            // no such code: ECD, after this macroblock
+                ctrl |= 1u << 14;
+                ends = true;
+            }
+        }
         idec_started = true;
-        idec_slice = slice;
+        idec_reset = slice || increment > 1;
         idec_qsc = qsc;
         ToRgb(raw, (command >> 27) & 1, (command >> 26) & 1);
         if (ends) busy = false;

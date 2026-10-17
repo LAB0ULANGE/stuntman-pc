@@ -68,6 +68,34 @@ class Bits:
         return value
 
 
+# ISO/IEC 13818-2 table B.1, macroblock_address_increment: (bits, length) for 1-33.
+INCREMENT_CODES = [("1", 1), ("011", 2), ("010", 3), ("0011", 4), ("0010", 5), ("00011", 6), ("00010", 7),
+                   ("0000111", 8), ("0000110", 9), ("00001011", 10), ("00001010", 11), ("00001001", 12),
+                   ("00001000", 13), ("00000111", 14), ("00000110", 15), ("0000010111", 16),
+                   ("0000010110", 17), ("0000010101", 18), ("0000010100", 19), ("0000010011", 20),
+                   ("0000010010", 21), ("00000100011", 22), ("00000100010", 23), ("00000100001", 24),
+                   ("00000100000", 25), ("00000011111", 26), ("00000011110", 27), ("00000011101", 28),
+                   ("00000011100", 29), ("00000011011", 30), ("00000011010", 31), ("00000011001", 32),
+                   ("00000011000", 33)]
+ESCAPE, STUFFING = "00000001000", "00000001111"
+
+
+def increment_bits(b):
+    """Reads a macroblock_address_increment (escapes and stuffing first)."""
+    while True:
+        for code in (ESCAPE, STUFFING):
+            if b.peek(len(code)) == int(code, 2):
+                b.get(len(code))
+                break
+        else:
+            break
+    for code, value in INCREMENT_CODES:
+        if b.peek(len(code)) == int(code, 2):
+            b.get(len(code))
+            return value
+    raise ValueError("no macroblock_address_increment at bit %d" % b.bit)
+
+
 def start_codes(data):
     at = 0
     while True:
@@ -154,6 +182,7 @@ def parse(es):
                     b.get(8)
             else:
                 b.get(1)
+            increment_bits(b)                                # the first macroblock's: the caller's
             header = b.bit - (at + 4) * 8
             end = codes[index + 1][0] + 4 if index + 1 < len(codes) else len(es)
             body = es[at + 4:end]
@@ -162,8 +191,9 @@ def parse(es):
             command = 0x10000000 | header | (qsc << 16) | ((0 if frame_dct else 1) << 24)
             slices.append((command, body))
     ctrl = (idp << 16) | (alternate << 20) | (ivf << 21) | (qst << 22) | (1 << 24)
-    # As a game gives it: one IDEC for the picture, from its first slice's
-    # header (FB and QSC its), the slices after it IDEC's own to read.
+    # As a game gives it: one IDEC for the picture, from past its first
+    # slice's header and first macroblock's increment (FB, and QSC that
+    # slice's), the slices after it IDEC's own to read.
     first_at = next(at for at, code in codes if 0x01 <= code <= 0xAF)
     last = max(i for i, (at, code) in enumerate(codes) if 0x01 <= code <= 0xAF)
     end = codes[last + 1][0] + 4 if last + 1 < len(codes) else len(es)

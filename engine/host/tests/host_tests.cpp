@@ -1542,8 +1542,8 @@ std::vector<u8> IpuRun(u32 word, const std::vector<u8>& stream) {
 }
 
 // IDEC on a picture made by hand, one IDEC for its two slices as a game
-// gives it: the first slice's macroblocks - the first at its start (DC
-// reset), the second with quant (a new quantiser_scale_code) and a luma DC
+// gives it, from past the first macroblock's increment: the first slice's
+// macroblocks - the first at its start (DC reset), the second with quant (a new quantiser_scale_code) and a luma DC
 // of +1 that the blocks after it keep, the third after a skip (increment 2:
 // DC reset again) and +1 - then the stuffing, the second slice's start code
 // and header (quantiser_scale_code, extra_bit_slice), whose macroblock
@@ -1558,7 +1558,7 @@ void IpuIdecDecodesASlice() {
     m.Write(0x10002000u, 0x90000000u, 4);           // SETTH 0, 0: alpha 0x80
     const std::string flat = std::string("10010") + "10010" + "10010" + "10010" + "0010" + "0010";
     const std::string plus = std::string("00110") + "10010" + "10010" + "10010" + "0010" + "0010";
-    const std::string bits = std::string("1") + "1" + flat +        // increment 1, intra
+    const std::string bits = std::string("1") + flat +              // intra (its increment the caller's)
                              "1" + "01" + "00010" + plus +          // increment 1, intra + quant, QSC 2
                              "011" + "1" + plus;                    // increment 2, intra, +1
     auto stuffed = [](std::string b) { return b + std::string((8 - b.size() % 8) % 8, '0'); };
