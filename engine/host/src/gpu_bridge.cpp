@@ -308,6 +308,34 @@ u64 g_mutations = 0;
 /* Whether the CLUT has rows the GPU's copy lacks. */
 bool b_clut_rows_cpu_only(const Bridge& b) { return (b.clut_cpu & ~b.clut_gpu) != 0; }
 std::map<std::string, u64> g_decode_kinds;      // PS2HOST_GPU_COUNT
+// PS2HOST_GPU_COUNT: which write-backs anything read again - a reload, a
+// texture or CLUT from GPU memory, the CPU - before their blocks were
+// written over: the block's last write-back, and whether each was read.
+bool CountingWriteBacks() {
+    static const bool on = std::getenv("PS2HOST_GPU_COUNT") != nullptr;
+    return on;
+}
+std::vector<u32> g_wb_owner(16384, 0);
+std::vector<u8> g_wb_read(1, 1);
+std::vector<u32> g_wb_blocks(1, 0);             // blocks each still owns
+u64 g_wb_done = 0, g_wb_never_read = 0, g_wb_never_read_blocks = 0;
+void SetWriteBackOwner(u32 i, u32 id) {
+    const u32 old = g_wb_owner[i];
+    if (old == id) return;
+    if (old && !g_wb_read[old]) ++g_wb_never_read_blocks;
+    if (old && --g_wb_blocks[old] == 0 && !g_wb_read[old]) ++g_wb_never_read;
+    g_wb_owner[i] = id;
+    if (id) ++g_wb_blocks[id];
+}
+void WriteBackRead(u32 begin, u32 end) {
+    if (!CountingWriteBacks()) return;
+    for (u32 i = begin; i < std::min(end, 16384u); ++i)
+        if (g_wb_owner[i]) g_wb_read[g_wb_owner[i]] = 1;
+}
+void WriteBackLost(u32 begin, u32 end) {        // written over: the write-back there done with
+    if (!CountingWriteBacks()) return;
+    for (u32 i = begin; i < std::min(end, 16384u); ++i) SetWriteBackOwner(i, 0);
+}
 
 // ------------------------------------------------------------------ --gpu
 
@@ -427,6 +455,14 @@ void WriteBack(Bridge& b, Owned& o) {
     const bool done = o.depth ? b.renderer->DepthToMemory(o.fbp, o.width, o.height, o.fbw, o.psm, o.x1, last, first)
                               : b.renderer->TargetToMemory(o.fbp, o.fbw, o.psm, o.x1, last, first);
     if (!done && gs::TheGs().trace) std::fprintf(gs::TheGs().trace_out, "[gpu]   (nothing to write back)\n");
+    if (done && CountingWriteBacks()) {
+        // The one before over these blocks, if never read, is now lost.
+        const u32 id = u32(g_wb_read.size());
+        g_wb_read.push_back(0);
+        g_wb_blocks.push_back(0);
+        ++g_wb_done;
+        for (u32 i = std::min(o.dirty_begin, 16384u); i < std::min(o.dirty_end, 16384u); ++i) SetWriteBackOwner(i, id);
+    }
     if (done) {
         ++b.write_backs;
         std::fill(b.blocks.begin() + std::min(o.dirty_begin, 16384u),
@@ -450,6 +486,8 @@ void Sync(Bridge& b, u32 begin, u32 end, bool write, const Owned* except = nullp
         const TimelineStep step("sync: memory for the CPU");
         Coherent(b, begin, end, false);
     }
+    WriteBackRead(begin, end);
+    if (write) WriteBackLost(begin, end);
     if (write) {
         std::fill(b.blocks.begin() + begin, b.blocks.begin() + std::min(end, 16384u), Bridge::kCpuNewer);
         std::fill(b.block_stamp.begin() + begin, b.block_stamp.begin() + std::min(end, 16384u), ++b.stamp);
@@ -484,6 +522,7 @@ void SyncWrite(Bridge& b, u32 begin, u32 end, const u8* cover) {
             last = i + 1;
         }
     if (first >= last) return;
+    WriteBackRead(first, last);             // (written in part: read; a measure's upper bound)
     // What the GPU images drew over them into the GPU's memory first (on the
     // GPU, nothing waiting): written back later, it would land over these.
     for (auto& [key, o] : b.owned)
@@ -602,6 +641,10 @@ Owned& Use(Bridge& b, u32 fbp, u32 fbw, u32 psm, bool depth, u32 width, u32 heig
         ++b.reloads;
         Coherent(b, o.begin, o.full_end, true);
         const u32 r0 = std::min(o.stale_row0, o.height), r1 = std::min(o.stale_row1, o.height);
+        {
+            const u32 page_rows = Is16(o.psm) ? 64 : 32, row_blocks = std::max(1u, o.fbw) * 32;
+            WriteBackRead(o.begin + r0 / page_rows * row_blocks, o.begin + (r1 + page_rows - 1) / page_rows * row_blocks);
+        }
         if (gs::TheGs().trace)   // in a capture's trace: an image brought back from memory, and why (Owned::why)
             std::fprintf(gs::TheGs().trace_out, "[gpu] reload %s %X/%u/%02X why %d rows %u-%u\n", depth ? "Z" : "C",
                          unsigned(o.fbp), unsigned(o.fbw), unsigned(o.psm), o.why, unsigned(r0), unsigned(r1));
@@ -854,6 +897,7 @@ bool LoadClut(Bridge& b, u64 tex0, u64 texa) {
     for (auto& [key, o] : b.owned)
         if (o.gpu_newer && o.dirty_begin < cbp + 8 && cbp < o.dirty_end) WriteBack(b, o);
     Coherent(b, cbp, cbp + 8, true);
+    WriteBackRead(cbp, cbp + 8);
     ps2gpu::GsClutLoad load;
     load.cbp = cbp;
     load.cpsm = cpsm;
@@ -987,6 +1031,7 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
         for (auto& [okey, o] : b.owned)
             if (o.gpu_newer && o.dirty_begin < t.end && t.begin < o.dirty_end) WriteBack(b, o);
         Coherent(b, t.begin, t.end, true);
+        WriteBackRead(t.begin, t.end);
         ps2gpu::GsTextureDecode d;
         d.tbp = tbp;
         d.tbw = tbw;
@@ -1849,6 +1894,9 @@ void GpuShadowFrame(u64 frame, const std::string& dump_dir) {
                          ps2gpu::GpuProfileReport().c_str());
         if (frame % 100 == 0 && std::getenv("PS2HOST_GPU_COUNT")) {
             std::fprintf(stderr, "[gpu]   last 100 frames: %s\n", ps2gpu::RendererCounters().c_str());
+            std::fprintf(stderr, "[gpu]   write-backs so far %llu; written over unread %llu (blocks %llu)\n",
+                         (unsigned long long)g_wb_done, (unsigned long long)g_wb_never_read,
+                         (unsigned long long)g_wb_never_read_blocks);
             std::vector<std::pair<u64, std::string>> kinds;
             for (const auto& [k, n] : g_decode_kinds) kinds.emplace_back(n, k);
             std::sort(kinds.rbegin(), kinds.rend());
