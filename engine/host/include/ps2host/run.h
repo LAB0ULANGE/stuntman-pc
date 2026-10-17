@@ -220,6 +220,10 @@ bool GpuPrimary();
    (every CLUT the GPU loads, loaded again), or "check" (loaded all the same,
    and any CLUT the cache would have kept that came out different said). */
 void SetTextureCache(const std::string& mode);
+/* How a batch in two passes (or blended in the shader) decides a primitive
+   overlaps what it drew: "exact" (triangles sharing a pixel) or "bbox" (the
+   bounding rectangles, as before). */
+void SetBatchOverlap(const std::string& mode);
 /* The GPU renderer's internal resolution, now (a GS replay's; a run takes
    the "resolution" setting between frames). */
 void GpuSetScale(u32 scale);

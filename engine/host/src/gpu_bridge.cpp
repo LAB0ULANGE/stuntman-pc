@@ -1772,6 +1772,12 @@ bool StartGpuRenderer(std::string* error, GpuMode mode, bool show) {
 
 bool GpuPrimary() { return g_bridge && g_bridge->primary; }
 
+void SetBatchOverlap(const std::string& mode) {
+    if (!g_bridge) return;
+    g_bridge->renderer->SetExactOverlap(mode != "bbox");
+    if (mode == "bbox") std::fprintf(stderr, "[gpu] batch overlap: bounding rectangles\n");
+}
+
 void SetTextureCache(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->texture_cache = mode == "off"     ? Bridge::TextureCache::kOff

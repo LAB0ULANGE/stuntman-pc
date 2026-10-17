@@ -777,6 +777,24 @@ void GpuMemorySwizzlesAsTheGs() {
 // Textures decoded on the GPU from its copy of local memory (--gpu, when the
 // GPU holds their blocks) must come out texel for texel as the GS model
 // decodes them: every format, CLUTs (CSA for 4-bit ones), TEXA, region modes.
+// The exact overlap test of batches in two passes: two triangles of a mesh
+// side by side share no pixel (their order in the batch changes nothing),
+// one over another does.
+void GpuTrianglesShareAPixelExactly() {
+    const float a[6] = {0, 0, 10, 0, 0, 10};
+    const float edge[6] = {10, 0, 10, 10, 0, 10};          // the other half of the square: a shared edge
+    const float over[6] = {2, 2, 12, 2, 2, 12};            // over a
+    const float corner[6] = {10, 0, 20, 0, 10, -10};       // a's corner only
+    const float flat[6] = {0, 0, 5, 5, 10, 10};            // no area
+    const float apart[6] = {30, 30, 40, 30, 30, 40};
+    Check(!ps2gpu::TrianglesShareAPixel(a, edge) && !ps2gpu::TrianglesShareAPixel(edge, a),
+          "GPU batches: triangles side by side share no pixel");
+    Check(ps2gpu::TrianglesShareAPixel(a, over), "GPU batches: a triangle over another shares pixels");
+    Check(!ps2gpu::TrianglesShareAPixel(a, corner) && !ps2gpu::TrianglesShareAPixel(a, flat) &&
+              !ps2gpu::TrianglesShareAPixel(a, apart),
+          "GPU batches: a corner, a triangle with no area, one apart: nothing shared");
+}
+
 void GpuDecodesTexturesAsTheGs() {
     using namespace ps2host::gs;
     std::string error;
@@ -2179,6 +2197,7 @@ int main() {
 #if PS2HOST_VULKAN
     GpuMemorySwizzlesAsTheGs();
     GpuDecodesTexturesAsTheGs();
+    GpuTrianglesShareAPixelExactly();
 #endif
     VifRunsMicroprogramsOnAVu();
     MemoryCardKeepsSaves();

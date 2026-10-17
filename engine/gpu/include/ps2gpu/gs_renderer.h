@@ -250,6 +250,11 @@ public:
     /* Rows of the GPU's CLUT (16 entries each; bit r of `rows` for row r)
        from the host's copy, `clut` being all 256 entries. */
     virtual void ClutRows(const std::uint32_t* clut, std::uint32_t rows) = 0;
+    /* A batch drawn in two passes (an alpha test whose failing pixels still
+       write) or blended in the shader ends where a primitive overlaps what it
+       drew: by their bounding rectangles (false), or (true, the default) only
+       where their triangles share a pixel - their interiors meeting. */
+    virtual void SetExactOverlap(bool exact) { (void)exact; }
     /* The GPU's CLUT as it stands, 256 entries (a check: the texture cache's). */
     virtual bool ReadClut(std::uint32_t* clut) {
         (void)clut;
@@ -330,6 +335,11 @@ std::string RendererCounters();
 std::uint64_t GpuBusyNanoseconds();
 /* PS2HOST_GPU_PROFILE: the GPU's time since the last call, by what it did. */
 std::string GpuProfileReport();
+
+/* Whether two triangles (x0, y0, x1, y1, x2, y2) share a pixel: their
+   interiors meet (a shared edge or corner does not; nor does a triangle with
+   no area). The exact overlap test's (SetExactOverlap). */
+bool TrianglesShareAPixel(const float a[6], const float b[6]);
 
 }  // namespace ps2gpu
 

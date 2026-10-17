@@ -120,6 +120,9 @@ struct Options {
        "texture_cache" setting's, on by default (PS2HOST_TEXTURE_CACHE_CHECK=1:
        check). */
     std::string texture_cache;
+    /* --batch-overlap exact|bbox: else the "batch_overlap" setting's, exact
+       by default (SetBatchOverlap). */
+    std::string batch_overlap;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
     bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */
     bool gpu = false;              /* draw on the GPU instead of the software GS (gpu_bridge.cpp) */

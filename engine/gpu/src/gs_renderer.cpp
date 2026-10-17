@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <set>
 #include <tuple>
 #include <unordered_map>
 
@@ -279,6 +280,78 @@ bool SameBatch(const GsDrawState& x, const GsDrawState& y) {
            x.sprite == y.sprite && x.sprite_prim == y.sprite_prim;
 }
 
+/* PS2HOST_GPU_COUNT: why batches end - the first state SameBatch finds
+   changed, or a flush from elsewhere (a sync, a CLUT, a decode, a read) -
+   for RendererCounters. */
+const char* BreakReason(const GsDrawState& x, const GsDrawState& y) {
+    if (x.fbp != y.fbp || x.fbw != y.fbw || x.psm != y.psm) return "target";
+    if (x.fbmsk != y.fbmsk) return "fbmsk";
+    if (x.scissor_x0 != y.scissor_x0 || x.scissor_y0 != y.scissor_y0 || x.scissor_x1 != y.scissor_x1 ||
+        x.scissor_y1 != y.scissor_y1)
+        return "scissor";
+    if (x.textured != y.textured) return "textured on/off";
+    if (x.textured) {
+        if (x.texture_target != y.texture_target || x.tex_fbp != y.tex_fbp || x.tex_fbw != y.tex_fbw ||
+            x.tex_target_psm != y.tex_target_psm)
+            return "texture from a target";
+        if (x.texture != y.texture) return "texture";
+        if (x.tfx != y.tfx || x.tcc != y.tcc) return "tfx/tcc";
+        if (x.bilinear != y.bilinear || x.mip != y.mip) return "filter";
+        if (x.wms != y.wms || x.wmt != y.wmt || x.minu != y.minu || x.maxu != y.maxu || x.minv != y.minv ||
+            x.maxv != y.maxv)
+            return "clamp";
+        if (x.tw != y.tw || x.th != y.th || x.tex_format != y.tex_format) return "texture size/format";
+        if (x.ta0 != y.ta0 || x.ta1 != y.ta1 || x.aem != y.aem) return "texa";
+    }
+    if (x.alpha_test != y.alpha_test || (x.alpha_test && (x.atst != y.atst || x.aref != y.aref || x.afail != y.afail)))
+        return "alpha test";
+    if (PipelineKey(x) != PipelineKey(y)) return "pipeline (blend, depth test, ...)";
+    if (x.blend && (x.fix != y.fix || x.pabe != y.pabe)) return "blend FIX/PABE";
+    if (x.depth != y.depth || (x.depth && (x.zbp != y.zbp || x.ztst != y.ztst || x.depth_write != y.depth_write)))
+        return "depth";
+    if (x.fog != y.fog || (x.fog && x.fogcol != y.fogcol)) return "fog";
+    if (x.date != y.date || (x.date && x.datm != y.datm)) return "date";
+    if (x.sprite != y.sprite || x.sprite_prim != y.sprite_prim) return "sprite/triangle";
+    return "?";
+}
+/* A batch's triangle, for the exact overlap test (DrawTriangles). */
+struct BatchTriangle {
+    double x[3], y[3];
+    int x0, y0, x1, y1;                 // its bounding pixels, inclusive
+};
+
+/* Whether two triangles' interiors meet: no axis among their six edges'
+   normals separates them (a shared edge, or a corner, is not meeting - the
+   rasterizer's top-left rule gives a pixel centre on it to one only). A
+   triangle with no area draws nothing: it meets nothing. */
+bool InteriorsMeet(const BatchTriangle& a, const BatchTriangle& b) {
+    auto area = [](const BatchTriangle& t) {
+        return (t.x[1] - t.x[0]) * (t.y[2] - t.y[0]) - (t.x[2] - t.x[0]) * (t.y[1] - t.y[0]);
+    };
+    if (area(a) == 0.0 || area(b) == 0.0) return false;
+    for (const BatchTriangle* t : {&a, &b})
+        for (int e = 0; e < 3; ++e) {
+            const double nx = -(t->y[(e + 1) % 3] - t->y[e]), ny = t->x[(e + 1) % 3] - t->x[e];
+            double a0 = 1e300, a1 = -1e300, b0 = 1e300, b1 = -1e300;
+            for (int i = 0; i < 3; ++i) {
+                const double pa = nx * a.x[i] + ny * a.y[i], pb = nx * b.x[i] + ny * b.y[i];
+                a0 = std::min(a0, pa);
+                a1 = std::max(a1, pa);
+                b0 = std::min(b0, pb);
+                b1 = std::max(b1, pb);
+            }
+            if (a1 <= b0 || b1 <= a0) return false;
+        }
+    return true;
+}
+
+std::map<std::string, std::uint64_t> g_breaks;
+const char* g_flush_why = nullptr;              // set by the batching's own flushes
+bool CountingBreaks() {
+    static const bool on = std::getenv("PS2HOST_GPU_COUNT") != nullptr;
+    return on;
+}
+
 class VulkanGsRenderer final : public GsRenderer {
 public:
     explicit VulkanGsRenderer(VulkanGpu& gpu) : g_(gpu) {}
@@ -345,6 +418,7 @@ public:
     void ClutFromMemory(const GsClutLoad& load) override;
     void ClutRows(const std::uint32_t* clut, std::uint32_t rows) override;
     bool ReadClut(std::uint32_t* clut) override;
+    void SetExactOverlap(bool exact) override { exact_overlap_ = exact; }
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                     std::uint32_t* width, std::uint32_t* height) override;
     bool ReadWoven(std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) override {
@@ -398,6 +472,73 @@ private:
        picture before them - a fainter blur). */
     bool drawn_any_ = false;
     int drawn_x0_ = 0, drawn_y0_ = 0, drawn_x1_ = 0, drawn_y1_ = 0;     /* pixels, inclusive */
+    /* The exact overlap test (SetExactOverlap): the batch's triangles, and a
+       grid of 32-pixel cells listing those over each. */
+    static constexpr int kCellShift = 5, kCells = 64;
+    bool exact_overlap_ = true;
+    std::vector<BatchTriangle> batch_tris_;
+    std::vector<std::vector<std::uint32_t>> batch_cells_ = std::vector<std::vector<std::uint32_t>>(kCells * kCells);
+    std::vector<std::uint32_t> used_cells_;
+    template <typename F>
+    void ForCells(const BatchTriangle& t, F&& f) {
+        const int cx0 = std::clamp(t.x0 >> kCellShift, 0, kCells - 1), cx1 = std::clamp(t.x1 >> kCellShift, 0, kCells - 1);
+        const int cy0 = std::clamp(t.y0 >> kCellShift, 0, kCells - 1), cy1 = std::clamp(t.y1 >> kCellShift, 0, kCells - 1);
+        for (int cy = cy0; cy <= cy1; ++cy)
+            for (int cx = cx0; cx <= cx1; ++cx) f(std::uint32_t(cy * kCells + cx));
+    }
+    static BatchTriangle TriangleOf(const GsVertex* v) {
+        BatchTriangle t{};
+        double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+        for (int i = 0; i < 3; ++i) {
+            t.x[i] = v[i].x;
+            t.y[i] = v[i].y;
+            x0 = std::min(x0, t.x[i]);
+            y0 = std::min(y0, t.y[i]);
+            x1 = std::max(x1, t.x[i]);
+            y1 = std::max(y1, t.y[i]);
+        }
+        t.x0 = int(std::floor(x0));
+        t.y0 = int(std::floor(y0));
+        t.x1 = int(std::ceil(x1));
+        t.y1 = int(std::ceil(y1));
+        return t;
+    }
+    /* Whether a triangle of these meets one the batch drew. */
+    bool MeetsBatch(const GsVertex* v, std::size_t count) {
+        for (std::size_t i = 0; i + 3 <= count; i += 3) {
+            const BatchTriangle t = TriangleOf(v + i);
+            bool meets = false;
+            ForCells(t, [&](std::uint32_t cell) {
+                if (meets) return;
+                for (std::uint32_t other : batch_cells_[cell]) {
+                    const BatchTriangle& o = batch_tris_[other];
+                    if (o.x1 < t.x0 || t.x1 < o.x0 || o.y1 < t.y0 || t.y1 < o.y0) continue;
+                    if (InteriorsMeet(t, o)) {
+                        meets = true;
+                        return;
+                    }
+                }
+            });
+            if (meets) return true;
+        }
+        return false;
+    }
+    void AddToBatch(const GsVertex* v, std::size_t count) {
+        for (std::size_t i = 0; i + 3 <= count; i += 3) {
+            const BatchTriangle t = TriangleOf(v + i);
+            const std::uint32_t index = std::uint32_t(batch_tris_.size());
+            batch_tris_.push_back(t);
+            ForCells(t, [&](std::uint32_t cell) {
+                if (batch_cells_[cell].empty()) used_cells_.push_back(cell);
+                batch_cells_[cell].push_back(index);
+            });
+        }
+    }
+    void ClearBatchTriangles() {
+        for (std::uint32_t cell : used_cells_) batch_cells_[cell].clear();
+        used_cells_.clear();
+        batch_tris_.clear();
+    }
     /* The batch's sprites (DrawTriangles: those meeting another edge to edge
        reach that edge): where on the screen and in the texture, and their
        first vertex in pending_. */
@@ -2080,7 +2221,10 @@ void VulkanGsRenderer::UploadDepth(std::uint32_t zbp, std::uint32_t width, std::
 }
 
 void VulkanGsRenderer::DrawTriangles(const GsDrawState& state, const GsVertex* v, std::size_t count) {
-    if (!SameBatch(state, state_)) Flush();
+    if (!SameBatch(state, state_)) {
+        if (CountingBreaks() && !pending_.empty()) g_flush_why = BreakReason(state, state_);
+        Flush();
+    }
     // A primitive sampling the target it draws into, where the batch has
     // drawn already: the batch so far first (the next takes a new copy).
     const bool feedback = state.textured && state.texture_target && state.tex_fbp == state.fbp &&
@@ -2126,8 +2270,25 @@ void VulkanGsRenderer::DrawTriangles(const GsDrawState& state, const GsVertex* v
         const auto overlaps = [&](int l, int t, int r, int bottom) {
             return drawn_any_ && r >= drawn_x0_ && l <= drawn_x1_ && bottom >= drawn_y0_ && t <= drawn_y1_;
         };
-        if ((feedback && overlaps(tu0, tv0, tu1, tv1)) || ((shader_blend || two_pass) && overlaps(x0, y0, x1, y1)))
+        // Over what the batch drew: by the rectangles, and (exact) where a
+        // triangle of it meets one the batch drew - triangles of a mesh side
+        // by side share no pixel, and their order then changes nothing.
+        const bool over = overlaps(x0, y0, x1, y1) && (!exact_overlap_ || count % 3 != 0 || MeetsBatch(v, count));
+        if ((feedback && overlaps(tu0, tv0, tu1, tv1)) || ((shader_blend || two_pass) && over)) {
+            if (CountingBreaks()) {
+                static std::set<std::string> names;
+                char two[160];
+                std::snprintf(two, sizeof two,
+                              "two-pass alpha test over itself (ATST %u AFAIL %u AREF %u ZTST %u zwrite %d FBMSK %08X PSM %02X blend %d)",
+                              unsigned(state.atst), unsigned(state.afail), unsigned(state.aref), unsigned(state.ztst),
+                              int(state.depth && state.depth_write), unsigned(state.fbmsk), unsigned(state.psm),
+                              int(state.blend));
+                g_flush_why = feedback ? "reads what the batch drew (feedback)"
+                              : shader_blend ? "blends in the shader over itself"
+                                             : names.insert(two).first->c_str();
+            }
             Flush();
+        }
         // What the copy must hold: the texels as CLAMP leaves them.
         if (feedback) {
             const int w = int(tw), h = int(th);
@@ -2150,6 +2311,7 @@ void VulkanGsRenderer::DrawTriangles(const GsDrawState& state, const GsVertex* v
         if (shader_blend) Reads(x0, y0, x1, y1);
     }
     state_ = state;
+    if ((shader_blend || two_pass) && exact_overlap_) AddToBatch(v, count);
     if (feedback || shader_blend || two_pass) {
         if (!drawn_any_) {
             drawn_x0_ = x0;
@@ -2337,7 +2499,10 @@ void VulkanGsRenderer::FlatQuadRange(FlatQuad& q, const GsDrawState& state) {
 }
 
 void VulkanGsRenderer::Flush() {
+    if (CountingBreaks() && !pending_.empty()) ++g_breaks[g_flush_why ? g_flush_why : "a flush from elsewhere"];
+    g_flush_why = nullptr;
     drawn_any_ = false;
+    ClearBatchTriangles();
     sprites_.clear();
     quads_.clear();
     last_flat_valid_ = false;
@@ -2851,7 +3016,17 @@ std::string RendererCounters() {
                   (unsigned long long)(now[2] - last[2]), (unsigned long long)(now[3] - last[3]),
                   (unsigned long long)(now[4] - last[4]), (unsigned long long)(now[5] - last[5]));
     for (int i = 0; i < 6; ++i) last[i] = now[i];
-    return text;
+    std::string out = text;
+    if (!g_breaks.empty()) {
+        std::vector<std::pair<std::uint64_t, std::string>> by;
+        for (const auto& [why, n] : g_breaks) by.push_back({n, why});
+        std::sort(by.rbegin(), by.rend());
+        out += "; batches ended by";
+        for (const auto& [n, why] : by) out += " " + why + " " + std::to_string(n) + ",";
+        out.pop_back();
+        g_breaks.clear();
+    }
+    return out;
 }
 
 std::string SubmitStats() {
@@ -2872,6 +3047,17 @@ std::unique_ptr<GsRenderer> CreateGsRenderer(Gpu& gpu, std::string* error) {
     auto renderer = std::make_unique<VulkanGsRenderer>(static_cast<VulkanGpu&>(gpu));
     if (!renderer->Init(error)) return nullptr;
     return renderer;
+}
+
+bool TrianglesShareAPixel(const float a[6], const float b[6]) {
+    BatchTriangle x{}, y{};
+    for (int i = 0; i < 3; ++i) {
+        x.x[i] = a[2 * i];
+        x.y[i] = a[2 * i + 1];
+        y.x[i] = b[2 * i];
+        y.y[i] = b[2 * i + 1];
+    }
+    return InteriorsMeet(x, y);
 }
 
 }  // namespace ps2gpu
