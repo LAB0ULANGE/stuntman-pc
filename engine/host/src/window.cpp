@@ -12,8 +12,10 @@
 #define NOMINMAX
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <functional>
@@ -300,6 +302,32 @@ void KeepFullscreenSetting() {
 #endif
 }
 
+bool PictureRate::Tick(bool fresh, u64 now_ns, std::string* line) {
+    if (!from_ns) {                             // the first blank starts the clock
+        from_ns = now_ns;
+        return false;
+    }
+    ++blanks;
+    if (fresh) ++pictures;
+    const u64 span = now_ns - from_ns;
+    if (span < 1000000000ull) return false;
+    char text[96];
+    std::snprintf(text, sizeof text, "%.1f images/s   %.1f VBlank/s", double(pictures) * 1e9 / double(span),
+                  double(blanks) * 1e9 / double(span));
+    *line = text;
+    from_ns = now_ns;
+    blanks = pictures = 0;
+    return true;
+}
+
+namespace {
+std::atomic<u64> g_fresh_pictures{0};
+}  // namespace
+
+void CountPresentedPicture(bool fresh) {
+    if (fresh) g_fresh_pictures.fetch_add(1, std::memory_order_relaxed);
+}
+
 bool PumpWindow() {
 #ifdef PS2HOST_VULKAN
     if (g_display) {
@@ -320,6 +348,21 @@ bool PumpWindow() {
         if (notice && std::chrono::steady_clock::now() >= notice_until) {
             notice = false;
             SetWindowOverlay({});
+        }
+        // show_fps=on: the game's picture rate and the blanks', once a second.
+        static const bool show_fps = SettingOn("show_fps") || std::getenv("PS2HOST_SHOW_FPS");
+        if (show_fps && !notice) {
+            static PictureRate rate;
+            static u64 seen = 0;
+            const u64 pictures = g_fresh_pictures.load(std::memory_order_relaxed);
+            std::string line;
+            const u64 now = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            if (rate.Tick(pictures != seen, now, &line)) {
+                SetWindowOverlay({line});
+                std::fprintf(stderr, "[fps] %s\n", line.c_str());      // in the log too, to quote
+            }
+            seen = pictures;
         }
         return !g_closed;
     }

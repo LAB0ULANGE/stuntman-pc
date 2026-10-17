@@ -1551,6 +1551,11 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns) {
             // internal resolution.
             const u32 k = g_bridge->renderer->Scale();
             const u32 lines = std::min(gs::TheGs().ShownLines(), 448u);    // 224 in field mode
+            // A new picture when the GPU drew into the one shown since it was
+            // last presented (show_fps).
+            static u64 shown_serial = 0;
+            CountPresentedPicture(found->second.drawn_serial != shown_serial);
+            shown_serial = found->second.drawn_serial;
             if (due_ns) display.PresentImageAt(image, layout, std::min(w, 640u * k), std::min(h, lines * k), due_ns);
             else display.PresentImage(image, layout, std::min(w, 640u * k), std::min(h, lines * k));
             return;

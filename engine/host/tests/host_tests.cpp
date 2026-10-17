@@ -1761,6 +1761,20 @@ void GsThreadWakesForEveryPacket() {
     Check(true, "the GS thread is woken for every packet");
 }
 
+// show_fps: the game's pictures and the blanks, a line a second - one new
+// picture every sixth blank at 38 blanks a second is about 6 images/s.
+void PictureRateCountsGamePictures() {
+    ps2host::PictureRate rate;
+    std::string line;
+    int lines = 0;
+    const u64 blank = 1000000000ull / 38 + 1;     // the 38th blank just past the second
+    for (u64 i = 0; i <= 38; ++i)
+        if (rate.Tick(i % 6 == 0, 1000 + i * blank, &line)) ++lines;
+    Check(lines == 1 && line.rfind("6.", 0) == 0 && line.find("images/s") != std::string::npos &&
+              line.find("38.0 VBlank/s") != std::string::npos,
+          "the picture rate: 6.x images/s at 38 blanks a second, once a second");
+}
+
 // vu_record=on in the PC settings: a played run records the vector units'
 // microprograms beside the settings, interpreted meanwhile; nothing added
 // otherwise.
@@ -2111,6 +2125,7 @@ int main() {
     IopPoolsAndLibraryCalls();
     IopSearchesTheDisc();
     PlaySettingsRecordVuPrograms();
+    PictureRateCountsGamePictures();
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);

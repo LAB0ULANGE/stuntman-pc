@@ -358,6 +358,21 @@ void SetWindowStatus(const std::string& status);
 /* A panel of text over the picture (a game's tool, its menu): the lines,
    the first a heading, one starting with '>' picked out; none when empty. */
 void SetWindowOverlay(const std::vector<std::string>& lines);
+/* The game's own picture rate, beside the vertical blanks': a game that
+   cannot keep up draws a picture over several blanks (Stuntman's stunt: 6
+   pictures a second at 38 blanks), and a blank rate alone says nothing of
+   what the player sees. Tick once a blank, `fresh` when the picture shown
+   was drawn since the last one; once a second (by `now_ns`, steady) it
+   gives the line to show and starts again. */
+struct PictureRate {
+    u64 from_ns = 0, blanks = 0, pictures = 0;
+    bool Tick(bool fresh, u64 now_ns, std::string* line);
+};
+/* A picture presented (gpu_bridge.cpp): new, or the one shown before. */
+void CountPresentedPicture(bool fresh);
+/* show_fps=on in the PC settings: the rate over the picture, in the window's
+   overlay while nothing else is in it (PumpWindow, once a blank). */
+
 /* The window's display, null when there is none (or no Vulkan one). */
 ps2gpu::Display* WindowDisplay();
 /* What the window shows instead of the software GS's picture (BGRA, as
