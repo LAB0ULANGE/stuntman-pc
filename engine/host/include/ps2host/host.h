@@ -125,6 +125,8 @@ struct Options {
     std::string batch_overlap;
     /* --newer-list on|off: else the "newer_list" setting's, on (SetNewerList). */
     std::string newer_list;
+    /* --owned-index on|off: else the "owned_index" setting's, on (SetOwnedIndex). */
+    std::string owned_index;
     /* --gs-whole-qwords on|off: else the "gs_whole_qwords" setting's, on (Gs::whole_qwords). */
     std::string gs_whole_qwords;
     /* --date-area batch|full: else the "date_area" setting's, batch (SetDateArea). */

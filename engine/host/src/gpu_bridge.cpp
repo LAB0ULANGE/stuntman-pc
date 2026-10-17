@@ -159,6 +159,10 @@ struct Owned {
     u64 reloads[4] = {};            // reloads, by why
     u64 drawn_serial = 0;           // when the GPU last drew into it (Bridge::serial)
     u64 checked = 0;                // Bridge::newer_epoch when Use last looked at the others
+    // Bridge::owned_pages: the blocks it is listed over, [begin, indexed_end);
+    // the last ForOverlapping that went over it.
+    u32 indexed_end = 0;
+    u64 visited = 0;
 };
 
 /* A texture decoded into the renderer (--gpu). */
@@ -214,6 +218,13 @@ struct Bridge {
     // and some no longer, dropped when next looked at (ForNewer): what a
     // write-back is looked for in, without going over all of `owned` (the
     // stunt has hundreds, a few newer at a time). newer_list setting.
+    // The images over each page (32 blocks) of local memory, as far as they
+    // reach (Owned::indexed_end): what a write or a draw over blocks makes
+    // stale, without going over all of `owned` (ForOverlapping). The
+    // owned_index setting.
+    std::vector<std::vector<Owned*>> owned_pages = std::vector<std::vector<Owned*>>(512);
+    u64 visit = 0;
+    bool owned_index = true;
     mutable std::vector<Owned*> newer;
     mutable bool newer_sorted = true;
     bool newer_list = true;
@@ -332,6 +343,35 @@ void ForNewer(const Bridge& b, F&& f) {
     }
     for (std::size_t i = 0; i < list.size(); ++i)
         if (list[i]->gpu_newer) f(*list[i]);
+}
+
+/* `o` listed over the blocks it reaches: [begin, the furthest of its ends). */
+void IndexOwned(Bridge& b, Owned& o) {
+    const u32 reach = std::min(16384u, std::max({o.full_end, o.end, o.drawn_end, o.dirty_end == 0 ? 0u : o.dirty_end}));
+    if (reach <= o.indexed_end) return;
+    const u32 from = o.indexed_end ? ((o.indexed_end - 1) >> 5) + 1 : (o.begin >> 5);
+    for (u32 page = from; page <= ((reach - 1) >> 5) && page < 512; ++page) b.owned_pages[page].push_back(&o);
+    o.indexed_end = reach;
+}
+
+/* `f` for each image that may lie over blocks [begin, end) - each once, in
+   no particular order (`f` makes its own test of them, and changes only the
+   image it is given). */
+template <typename F>
+void ForOverlapping(Bridge& b, u32 begin, u32 end, F&& f) {
+    if (!b.owned_index) {
+        for (auto& [key, o] : b.owned) f(o);
+        return;
+    }
+    end = std::min(end, 16384u);
+    if (begin >= end) return;
+    const u64 visit = ++b.visit;
+    for (u32 page = begin >> 5; page <= ((end - 1) >> 5); ++page)
+        for (Owned* o : b.owned_pages[page])
+            if (o->visited != visit) {
+                o->visited = visit;
+                f(*o);
+            }
 }
 
 /* Whether the CLUT has rows the GPU's copy lacks. */
@@ -522,15 +562,16 @@ void Sync(Bridge& b, u32 begin, u32 end, bool write, const Owned* except = nullp
         std::fill(b.blocks.begin() + begin, b.blocks.begin() + std::min(end, 16384u), Bridge::kCpuNewer);
         std::fill(b.block_stamp.begin() + begin, b.block_stamp.begin() + std::min(end, 16384u), ++b.stamp);
     }
-    for (auto& [key, o] : b.owned) {
-        if (&o == except) continue;
-        if (!write || end <= o.begin || o.full_end <= begin) continue;
-        if (begin < o.end) {
-            MarkStale(o, 1, begin, end);
-        } else {
-            o.stale_beyond = true;
-        }
-    }
+    if (write)
+        ForOverlapping(b, begin, end, [&](Owned& o) {
+            if (&o == except) return;
+            if (end <= o.begin || o.full_end <= begin) return;
+            if (begin < o.end) {
+                MarkStale(o, 1, begin, end);
+            } else {
+                o.stale_beyond = true;
+            }
+        });
     if (write && begin < end)
         for (u32 page = begin >> 5; page <= ((end - 1) >> 5) && page < 512; ++page)
             for (Cached* t : b.texture_pages[page])
@@ -568,11 +609,11 @@ void SyncWrite(Bridge& b, u32 begin, u32 end, const u8* cover) {
     ++b.stamp;
     for (u32 i = first; i < last && i < 16384; ++i)
         if (cover[i - begin]) b.block_stamp[i] = b.stamp;
-    for (auto& [key, o] : b.owned) {
-        if (last <= o.begin || o.full_end <= first) continue;
+    ForOverlapping(b, first, last, [&](Owned& o) {
+        if (last <= o.begin || o.full_end <= first) return;
         if (first < o.end) MarkStale(o, 1, first, last);
         else o.stale_beyond = true;
-    }
+    });
     for (u32 page = first >> 5; page <= ((last - 1) >> 5) && page < 512; ++page)
         for (Cached* t : b.texture_pages[page])
             if (t->begin < last && first < t->end) t->valid = false;
@@ -644,10 +685,12 @@ Owned& Use(Bridge& b, u32 fbp, u32 fbw, u32 psm, bool depth, u32 width, u32 heig
         o.full_end = Blocks(fbp, fbw, psm, height).second;
         o.drawn_end = o.begin;
         o.stale_pages.set();
+        IndexOwned(b, o);
     } else {
         const u32 end = Blocks(fbp, fbw, psm, rows).second;
         if (end > o.end) {
             o.end = end;
+            IndexOwned(b, o);
             o.checked = 0;
             if (o.stale_beyond) MarkStale(o, 1);     // rows drawn over before it reached them (stale or not)
         }
@@ -750,6 +793,7 @@ void Drew(Bridge& b, Owned& o, u32 x0, u32 x1, u32 y1, u32 y0) {
     o.end = std::max(o.end, o.drawn_end);
     o.dirty_begin = std::min(o.dirty_begin, db);
     o.dirty_end = std::max(o.dirty_end, de);
+    if (o.dirty_end > o.indexed_end || o.end > o.indexed_end || o.drawn_end > o.indexed_end) IndexOwned(b, o);
     if (!in_rect) {
         o.dirty_pages |= pages;
         std::memcpy(o.rect, r, sizeof r);
@@ -760,14 +804,14 @@ void Drew(Bridge& b, Owned& o, u32 x0, u32 x1, u32 y1, u32 y0) {
     if (in_rect) pages = PagesOf(o, x0, x1, y0, y1);   // (not expected: inside whenever in the rectangle)
     ++g_mutations;
     ++b.newer_epoch;
-    for (auto& [key, other] : b.owned) {
-        if (&other == &o || de <= other.begin || other.full_end <= db) continue;
+    ForOverlapping(b, db, de, [&](Owned& other) {
+        if (&other == &o || de <= other.begin || other.full_end <= db) return;
         if (db < other.end) {
             MarkStale(other, 2, db, de, &pages, Is16(o.psm));
         } else {
             other.stale_beyond = true;
         }
-    }
+    });
 }
 
 /* The pages of target `o` a primitive sampling it as a TW x TH texture can
@@ -910,8 +954,9 @@ bool LoadClut(Bridge& b, u64 tex0, u64 texa) {
     if (b.texture_cache != Bridge::TextureCache::kOff) {
         u64 written = 0, drawn = 0;
         for (u32 i = cbp; i < cbp + 8 && i < 16384; ++i) written = std::max(written, b.block_stamp[i]);
-        for (const auto& [key, o] : b.owned)
+        ForOverlapping(b, cbp, cbp + 8, [&](Owned& o) {
             if (o.begin < cbp + 8 && cbp < std::max(o.drawn_end, o.dirty_end)) drawn = std::max(drawn, o.drawn_serial);
+        });
         const u64 parts[] = {cbp, cpsm, csa, u64(psm == gs::PSMT8 || psm == gs::PSMT8H), texa & 0x80FF,
                              Bits(texa, 32, 8), written, drawn};
         source = 1469598103934665603ull;
@@ -1867,6 +1912,12 @@ void SetDateArea(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->renderer->SetDateArea(mode != "full");
     if (mode == "full") std::fprintf(stderr, "[gpu] DATE set up over the whole target\n");
+}
+
+void SetOwnedIndex(bool on) {
+    if (!g_bridge) return;
+    g_bridge->owned_index = on;
+    if (!on) std::fprintf(stderr, "[gpu] images over blocks: looked for among all\n");
 }
 
 void SetNewerList(bool on) {

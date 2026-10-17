@@ -227,6 +227,10 @@ void SetBatchOverlap(const std::string& mode);
 /* The GPU images newer than local memory kept in a list (the "newer_list"
    setting, on by default; --newer-list on|off), not looked for among all. */
 void SetNewerList(bool on);
+/* The GPU images listed by the pages of memory they lie over (the
+   "owned_index" setting, on by default; --owned-index on|off), not looked
+   for among all. */
+void SetOwnedIndex(bool on);
 /* The destination alpha test's setup: over the batch's rectangle ("batch",
    the "date_area" setting's default) or the whole target ("full";
    --date-area). */

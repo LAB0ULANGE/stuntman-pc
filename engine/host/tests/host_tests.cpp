@@ -1944,14 +1944,29 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         textured(0, 100, 16, 108, 0, 0);
         textured(0, 40, 16, 48, 40, 20);                                // into texture rows 8-15
         textured(20, 100, 36, 108, 0, 8);                               // reading them
+        // One image drawn over another's memory and read back by the CPU (so
+        // no longer newer than memory), then the other drawn again: it must
+        // have taken the first's drawing in (made stale as it was drawn).
+        gs.WriteRegister(0x00, 6);
+        gs.WriteRegister(0x40, u64(127) << 16 | u64(255) << 48);       // SCISSOR 128x256
+        frame(2);
+        sprite(0, 104, 128, 112, 0x21436587u ^ colour);                 // rows 96-127: pages 6 and 7
+        frame(1);
+        sprite(8, 200, 40, 210, 0x3C2D1E0Fu ^ colour);                  // page 6, 64 wide
+        gs.Finish();
+        if (gs.on_memory) gs.on_memory(fbp * 32, fbp * 32 + 256, false);
+        frame(2);
+        sprite(70, 100, 80, 104, 0x13579BDFu ^ colour);                 // page 7 again
         gs.Finish();
     };
-    // The newer images in a list, the DATE setup over the batch; then the
-    // ways before (newer_list=off, date_area=full).
+    // The newer images in a list, the images indexed by page, the DATE setup
+    // over the batch; then the ways before (newer_list=off, owned_index=off,
+    // date_area=full).
     bool same = true;
     for (int list = 1; list >= 0; --list) {
         ps2host::SetNewerList(list != 0);
         ps2host::SetDateArea(list ? "batch" : "full");
+        ps2host::SetOwnedIndex(list != 0);
         const u32 fbp = list ? 0x10 : 0x30, colour = list ? 0 : 0x01010101u;
         auto soft = std::make_unique<Gs>();
         scene(*soft, fbp, colour);
@@ -1966,6 +1981,7 @@ void GpuBridgeKeepsMemoryAsTheGs() {
     }
     ps2host::SetDateArea("batch");
     ps2host::SetNewerList(true);
+    ps2host::SetOwnedIndex(true);
 #endif
 }
 

@@ -650,6 +650,7 @@ int Run(const Options& options) {
                                                        : Setting("texture_cache", "on"));
         SetBatchOverlap(!options.batch_overlap.empty() ? options.batch_overlap : Setting("batch_overlap", "exact"));
         SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
+        SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
     }
     bool sound = false;
@@ -761,6 +762,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--texture-cache" && i + 1 < argc) options.texture_cache = argv[++i];
         else if (arg == "--batch-overlap" && i + 1 < argc) options.batch_overlap = argv[++i];
         else if (arg == "--newer-list" && i + 1 < argc) options.newer_list = argv[++i];
+        else if (arg == "--owned-index" && i + 1 < argc) options.owned_index = argv[++i];
         else if (arg == "--gs-whole-qwords" && i + 1 < argc) options.gs_whole_qwords = argv[++i];
         else if (arg == "--date-area" && i + 1 < argc) options.date_area = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
