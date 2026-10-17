@@ -24,6 +24,7 @@
 #include "iop_vm_internal.h"
 #include "spu2.h"
 #include "ps2host/mc2.h"
+#include "ps2host/iop_vm.h"
 #include "ps2host/memory.h"
 #include "ps2host/vif.h"
 #include "ps2host/path3.h"
@@ -1713,6 +1714,10 @@ void IopPoolsAndLibraryCalls() {
           "FreeFpl with the waiter gone: the block back in the pool, no thread made up");
     Check(call("thfpool", 5, {pool}) == 0 && s32(call("thfpool", 6, {pool})) == -412,
           "DeleteFpl, then the pool is unknown");
+    vm.threads[901].wait = Wait::Fpl;
+    vm.threads[901].ready = false;
+    Check(ps2host::iop::Report().find("waiting for a fixed-size pool's block") != std::string::npos,
+          "the report names a thread waiting for a pool's block");
     vm.current = saved_current;
     vm.threads.erase(900);
     vm.threads.erase(901);

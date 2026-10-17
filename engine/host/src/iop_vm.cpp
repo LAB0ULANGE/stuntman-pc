@@ -668,8 +668,11 @@ std::string Report() {
             out += line;
         }
     }
+    // One per Wait, in its order.
     static const char* waits[] = {"ready", "waiting on a semaphore", "waiting on an event flag",
-                                  "sleeping", "delayed", "dormant", "serving RPC"};
+                                  "sleeping", "delayed", "dormant", "serving RPC",
+                                  "waiting for a fixed-size pool's block"};
+    static_assert(sizeof waits / sizeof *waits == int(Wait::Fpl) + 1, "a name for every Wait");
     for (auto& [id, t] : vm.threads) {
         char line[160];
         std::snprintf(line, sizeof line, "  IOP thread %u: %s, priority %d, entry 0x%08X, at 0x%08X\n",
