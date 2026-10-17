@@ -109,6 +109,12 @@ constexpr u8 kAlternate[64] = {0,  8,  16, 24, 1,  9,  2,  10, 17, 25, 32, 40, 4
                                41, 33, 26, 18, 3,  11, 4,  12, 19, 27, 34, 42, 50, 58, 35, 43,
                                51, 59, 20, 28, 5,  13, 6,  14, 21, 29, 36, 44, 52, 60, 37, 45,
                                53, 61, 22, 30, 7,  15, 23, 31, 38, 46, 54, 62, 39, 47, 55, 63};
+// Each position's rank in the zig-zag scan (kZigZag's inverse).
+const std::array<u8, 64> kZigZagRank = [] {
+    std::array<u8, 64> rank{};
+    for (int i = 0; i < 64; ++i) rank[kZigZag[i]] = u8(i);
+    return rank;
+}();
 // quantiser_scale_code to quantiser_scale, q_scale_type 1 (table 7-6).
 constexpr u8 kNonLinearScale[32] = {0,  1,  2,  3,  4,  5,  6,  7,  8,  10, 12, 14, 16, 18,  20,  22,
                                     24, 28, 32, 36, 40, 44, 48, 52, 56, 64, 72, 80, 88, 96, 104, 112};
@@ -225,7 +231,7 @@ public:
     u32 cmd_data = 0;
     u32 ctrl = 0;                       // the writable fields and CBP, ECD, SCD
     u32 th0 = 0, th1 = 0;
-    u8 iq[2][64] = {};                  // intra, non-intra (as transmitted: scan order)
+    u8 iq[2][64] = {};                  // intra, non-intra (as transmitted: zig-zag order)
     u16 vqclut[16] = {};
 
     // The bitstream: the buffer (FP quadwords, BP bits into the first) and the FIFO.
@@ -647,7 +653,10 @@ public:
             index += run;
             if (index > 63) { ctrl |= 1u << 14; break; }
             const int position = scan[index];
-            const s32 weight = matrix[index];
+            // The matrices come in zig-zag order whatever the scan (6.3.11),
+            // and weigh a coefficient by where it is in the block (7.4.2.1):
+            // its zig-zag rank, not its rank in an alternate scan.
+            const s32 weight = matrix[kZigZagRank[position]];
             const s32 magnitude = level < 0 ? -level : level;
             s32 value = intra ? (magnitude * s32(scale) * weight) >> 4
                               : ((2 * magnitude + 1) * s32(scale) * weight) >> 5;
