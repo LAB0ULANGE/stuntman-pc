@@ -647,6 +647,7 @@ int Run(const Options& options) {
                         : check && *check == '1'       ? std::string("check")
                                                        : Setting("texture_cache", "on"));
         SetBatchOverlap(!options.batch_overlap.empty() ? options.batch_overlap : Setting("batch_overlap", "exact"));
+        SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
     }
     bool sound = false;
     if (options.audio) {
@@ -756,6 +757,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--deinterlace" && i + 1 < argc) options.deinterlace = argv[++i];
         else if (arg == "--texture-cache" && i + 1 < argc) options.texture_cache = argv[++i];
         else if (arg == "--batch-overlap" && i + 1 < argc) options.batch_overlap = argv[++i];
+        else if (arg == "--newer-list" && i + 1 < argc) options.newer_list = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;

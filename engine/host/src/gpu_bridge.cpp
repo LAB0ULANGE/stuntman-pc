@@ -210,6 +210,13 @@ struct Bridge {
 
     // Primary.
     std::map<std::tuple<u32, u32, u32, bool>, Owned> owned;
+    // The images drawn on the GPU and not yet in local memory (gpu_newer) -
+    // and some no longer, dropped when next looked at (ForNewer): what a
+    // write-back is looked for in, without going over all of `owned` (the
+    // stunt has hundreds, a few newer at a time). newer_list setting.
+    mutable std::vector<Owned*> newer;
+    mutable bool newer_sorted = true;
+    bool newer_list = true;
     std::unordered_map<u64, Cached> textures;
     std::list<u64> texture_lru;     // most recent first
     // The textures over each page (32 blocks) of local memory, for what a
@@ -304,6 +311,28 @@ Bridge* g_bridge = nullptr;
 // primitive with the registers of the one before draws as that one did
 // (OnDraw's fast path).
 u64 g_mutations = 0;
+
+/* `f` for each image the GPU holds newer than local memory, in the order
+   of `owned` (its keys'): the order write-backs land in, as before. `f` may
+   write images back, not draw. */
+template <typename F>
+void ForNewer(const Bridge& b, F&& f) {
+    if (!b.newer_list) {
+        for (const auto& [key, o] : b.owned)
+            if (o.gpu_newer) f(const_cast<Owned&>(o));
+        return;
+    }
+    auto& list = b.newer;
+    list.erase(std::remove_if(list.begin(), list.end(), [](const Owned* o) { return !o->gpu_newer; }), list.end());
+    if (!b.newer_sorted) {
+        std::sort(list.begin(), list.end(), [](const Owned* x, const Owned* y) {
+            return std::make_tuple(x->fbp, x->fbw, x->psm, x->depth) < std::make_tuple(y->fbp, y->fbw, y->psm, y->depth);
+        });
+        b.newer_sorted = true;
+    }
+    for (std::size_t i = 0; i < list.size(); ++i)
+        if (list[i]->gpu_newer) f(*list[i]);
+}
 
 /* Whether the CLUT has rows the GPU's copy lacks. */
 bool b_clut_rows_cpu_only(const Bridge& b) { return (b.clut_cpu & ~b.clut_gpu) != 0; }
@@ -479,8 +508,9 @@ void ApplyPatch(Bridge& b);
 void Sync(Bridge& b, u32 begin, u32 end, bool write, const Owned* except = nullptr) {
     ++g_mutations;
     ApplyPatch(b);
-    for (auto& [key, o] : b.owned)
-        if (&o != except && o.gpu_newer && o.dirty_begin < end && begin < o.dirty_end) WriteBack(b, o);
+    ForNewer(b, [&](Owned& o) {
+        if (&o != except && o.dirty_begin < end && begin < o.dirty_end) WriteBack(b, o);
+    });
     {
         Timed timed(Section::GpuSync);
         const TimelineStep step("sync: memory for the CPU");
@@ -525,8 +555,9 @@ void SyncWrite(Bridge& b, u32 begin, u32 end, const u8* cover) {
     WriteBackRead(first, last);             // (written in part: read; a measure's upper bound)
     // What the GPU images drew over them into the GPU's memory first (on the
     // GPU, nothing waiting): written back later, it would land over these.
-    for (auto& [key, o] : b.owned)
-        if (o.gpu_newer && o.dirty_begin < last && first < o.dirty_end) WriteBack(b, o);
+    ForNewer(b, [&](Owned& o) {
+        if (o.dirty_begin < last && first < o.dirty_end) WriteBack(b, o);
+    });
     // Blocks written in part where the GPU's are newer: the transfer's pixels
     // patched into the GPU's when it is done, the blocks still the GPU's.
     b.patch.transfer = gs::TheGs().last_transfer;
@@ -624,12 +655,13 @@ Owned& Use(Bridge& b, u32 fbp, u32 fbw, u32 psm, bool depth, u32 width, u32 heig
     if (!o.stale && o.checked == b.newer_epoch) return o;
     ++g_mutations;
     // Another image's drawing over these blocks reaches this one through memory.
-    for (auto& [key, other] : b.owned)
-        if (&other != &o && other.gpu_newer && other.dirty_begin < o.end && o.begin < other.dirty_end) {
+    ForNewer(b, [&](Owned& other) {
+        if (&other != &o && other.dirty_begin < o.end && o.begin < other.dirty_end) {
             const u32 b0 = other.dirty_begin, b1 = other.dirty_end;
             WriteBack(b, other);
             MarkStale(o, 3, b0, b1, nullptr, Is16(other.psm));
         }
+    });
     o.checked = b.newer_epoch;
     if (o.stale) {
         // Loaded from the GPU's local memory, the CPU's writes there first -
@@ -707,6 +739,10 @@ void Drew(Bridge& b, Owned& o, u32 x0, u32 x1, u32 y1, u32 y0) {
     if (!in_rect) pages = PagesOf(o, x0, x1, y0, y1);
     const bool inside = o.gpu_newer && db >= o.dirty_begin && de <= o.dirty_end &&
                         (in_rect || (pages & ~o.dirty_pages).none());
+    if (!o.gpu_newer) {
+        b.newer.push_back(&o);
+        b.newer_sorted = b.newer.size() < 2;
+    }
     o.gpu_newer = true;
     o.x1 = std::max(o.x1, std::min(x1, o.width));
     o.y1 = std::max(o.y1, y1);
@@ -777,8 +813,10 @@ bool SampledPages(const Owned& o, u64 clamp, u32 tw, u32 th, const ps2gpu::GsVer
    was loaded, or drawn by another image the GPU has not written back. */
 void Sample(Bridge& b, Owned& o, const Pages& pages) {
     bool needed = o.stale && (o.stale_pages & pages).any();
-    for (auto it = b.owned.begin(); !needed && it != b.owned.end(); ++it)
-        needed = &it->second != &o && it->second.gpu_newer && (it->second.dirty_pages & pages).any();
+    if (!needed)
+        ForNewer(b, [&](Owned& other) {
+            if (!needed && &other != &o && (other.dirty_pages & pages).any()) needed = true;
+        });
     if (needed) Use(b, o.fbp, o.fbw, o.psm, false, o.width, o.height, 1);   // sampling grows nothing
 }
 
@@ -894,8 +932,9 @@ bool LoadClut(Bridge& b, u64 tex0, u64 texa) {
     // The check: the GPU's CLUT before a load the cache would have kept.
     u32 before[256] = {};
     const bool check = same && b.renderer->ReadClut(before);
-    for (auto& [key, o] : b.owned)
-        if (o.gpu_newer && o.dirty_begin < cbp + 8 && cbp < o.dirty_end) WriteBack(b, o);
+    ForNewer(b, [&](Owned& o) {
+        if (o.dirty_begin < cbp + 8 && cbp < o.dirty_end) WriteBack(b, o);
+    });
     Coherent(b, cbp, cbp + 8, true);
     WriteBackRead(cbp, cbp + 8);
     ps2gpu::GsClutLoad load;
@@ -935,8 +974,11 @@ bool LoadClut(Bridge& b, u64 tex0, u64 texa) {
 /* Whether the GPU holds blocks [begin, end) newer than the CPU: an image drawn
    over them and not yet swizzled into GPU memory, or GPU memory newer. */
 bool GpuHolds(const Bridge& b, u32 begin, u32 end) {
-    for (const auto& [key, o] : b.owned)
-        if (o.gpu_newer && o.dirty_begin < end && begin < o.dirty_end) return true;
+    bool newer = false;
+    ForNewer(b, [&](Owned& o) {
+        if (o.dirty_begin < end && begin < o.dirty_end) newer = true;
+    });
+    if (newer) return true;
     end = std::min(end, 16384u);
     for (u32 i = begin; i < end; ++i)
         if (b.blocks[i] == Bridge::kGpuNewer) return true;
@@ -1028,8 +1070,9 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
     // CPU's newer blocks and CLUT rows sent over first.
     bool gpu_holds_now = false;
     auto gpu_decode = [&] {
-        for (auto& [okey, o] : b.owned)
-            if (o.gpu_newer && o.dirty_begin < t.end && t.begin < o.dirty_end) WriteBack(b, o);
+        ForNewer(b, [&](Owned& o) {
+            if (o.dirty_begin < t.end && t.begin < o.dirty_end) WriteBack(b, o);
+        });
         Coherent(b, t.begin, t.end, true);
         WriteBackRead(t.begin, t.end);
         ps2gpu::GsTextureDecode d;
@@ -1819,6 +1862,12 @@ bool StartGpuRenderer(std::string* error, GpuMode mode, bool show) {
 }
 
 bool GpuPrimary() { return g_bridge && g_bridge->primary; }
+
+void SetNewerList(bool on) {
+    if (!g_bridge) return;
+    g_bridge->newer_list = on;
+    if (!on) std::fprintf(stderr, "[gpu] images newer than memory: looked for among all\n");
+}
 
 void SetBatchOverlap(const std::string& mode) {
     if (!g_bridge) return;

@@ -224,6 +224,9 @@ void SetTextureCache(const std::string& mode);
    overlaps what it drew: "exact" (triangles sharing a pixel) or "bbox" (the
    bounding rectangles, as before). */
 void SetBatchOverlap(const std::string& mode);
+/* The GPU images newer than local memory kept in a list (the "newer_list"
+   setting, on by default; --newer-list on|off), not looked for among all. */
+void SetNewerList(bool on);
 /* The GPU renderer's internal resolution, now (a GS replay's; a run takes
    the "resolution" setting between frames). */
 void GpuSetScale(u32 scale);

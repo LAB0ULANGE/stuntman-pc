@@ -1831,6 +1831,56 @@ void PictureRateCountsGamePictures() {
 // CSR.FIELD is the field being shown: the same however often it is read in
 // a field (it changed at every read). Last of the tests: it installs the
 // devices' register hooks.
+// The GPU drawing in the GS's stead (--gpu): images over the same memory at
+// two widths, drawn in turn, and that memory read back by the CPU - as the
+// software GS has it, the images newer than memory kept in a list
+// (newer_list) or looked for among all.
+void GpuBridgeKeepsMemoryAsTheGs() {
+#if PS2HOST_VULKAN
+    using namespace ps2host::gs;
+    std::string error;
+    if (!ps2host::StartGpuRenderer(&error, ps2host::GpuMode::Primary, false)) {
+        std::printf("  (GpuBridgeKeepsMemoryAsTheGs skipped: %s)\n", error.c_str());
+        return;
+    }
+    const auto scene = [](Gs& gs, u32 fbp, u32 colour) {
+        const auto frame = [&](u32 fbw) { gs.WriteRegister(0x4C, u64(fbp) | u64(fbw) << 16 | u64(PSMCT32) << 24); };
+        const auto sprite = [&](u32 x0, u32 y0, u32 x1, u32 y1, u32 rgba) {
+            gs.WriteRegister(0x00, 6);
+            gs.WriteRegister(0x01, rgba);
+            gs.WriteRegister(0x05, u64(x0 << 4) | u64(y0 << 4) << 16);
+            gs.WriteRegister(0x05, u64(x1 << 4) | u64(y1 << 4) << 16);
+        };
+        gs.WriteRegister(0x40, u64(127) << 16 | u64(127) << 48);       // SCISSOR 0..127
+        frame(2);
+        sprite(0, 0, 128, 32, 0x11223344u ^ colour);
+        frame(1);                                                       // the same memory, 64 wide
+        sprite(16, 8, 48, 48, 0x55667788u ^ colour);
+        frame(2);
+        sprite(60, 4, 100, 20, 0x99AABBCCu ^ colour);
+        frame(1);
+        sprite(0, 40, 20, 60, 0x0F1E2D3Cu ^ colour);
+        gs.Finish();
+    };
+    bool same = true;
+    for (int list = 1; list >= 0; --list) {
+        ps2host::SetNewerList(list != 0);
+        const u32 fbp = list ? 0x10 : 0x30, colour = list ? 0 : 0x01010101u;
+        auto soft = std::make_unique<Gs>();
+        scene(*soft, fbp, colour);
+        Gs& gpu = TheGs();
+        scene(gpu, fbp, colour);
+        const u32 begin = fbp * 32, end = begin + 256;
+        gpu.on_memory(begin, end, false);                               // the CPU reads it
+        same = same && std::memcmp(gpu.memory.data() + begin * 256, soft->memory.data() + begin * 256,
+                                   (end - begin) * 256) == 0;
+        Check(same, list ? "GPU bridge: images at two widths over one memory, read back as the GS has it"
+                         : "GPU bridge: the same, newer images looked for among all (newer_list=off)");
+    }
+    ps2host::SetNewerList(true);
+#endif
+}
+
 void GsCsrFieldHoldsThroughAField() {
     ps2host::InstallDevices();
     ps2host::Memory& m = ps2host::GuestMemory();
@@ -2224,6 +2274,7 @@ int main() {
     PictureRateCountsGamePictures();
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();
+    GpuBridgeKeepsMemoryAsTheGs();                  // near the end: it puts the GPU in the GS's stead
     GsCsrFieldHoldsThroughAField();                 // last: it installs the devices
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;
