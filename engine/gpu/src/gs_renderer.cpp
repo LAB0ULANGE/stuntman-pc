@@ -2669,6 +2669,17 @@ void VulkanGsRenderer::Flush() {
             const bool outside = state_.date || copy_first ||
                                  (source && source->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (outside || open_target_ != t || open_depth_ != depth) EndPass(cmd);
+            if (CountingBreaks()) {     // (measure: DATE setups whose stencil the last left as it is)
+                static Image* last_t = nullptr;
+                static std::uint32_t last_datm = 9;
+                const bool alpha = (mask & 8u) != 0;
+                if (state_.date) {
+                    ++g_breaks["(DATE setups)"];
+                    if (last_t == t && last_datm == state_.datm) ++g_breaks["(DATE setups, stencil unchanged)"];
+                }
+                if (state_.date && !alpha) { last_t = t; last_datm = state_.datm; }
+                else if (t == last_t && alpha) last_t = nullptr;
+            }
             if (state_.date) DateSetup(cmd, *t, *depth, state_.datm);
             if (copy_first) {
                 ++g_feedback;

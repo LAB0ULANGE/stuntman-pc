@@ -111,7 +111,9 @@ target_include_directories(ps2gpu PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include PRIVA
 target_compile_features(ps2gpu PUBLIC cxx_std_17)
 target_link_libraries(ps2gpu PUBLIC SDL3::SDL3-static PRIVATE volk::volk Vulkan::Headers)
 if(MSVC)
-    target_compile_options(ps2gpu PRIVATE /W3)
+    # /Z7: its functions named in --sample's profile (profile.cpp), as the
+    # host's are - without, its samples went to the nearest public name.
+    target_compile_options(ps2gpu PRIVATE /W3 /Z7)
 endif()
 
 add_executable(ps2gpu_smoke ${CMAKE_CURRENT_LIST_DIR}/tests/display_smoke.cpp)

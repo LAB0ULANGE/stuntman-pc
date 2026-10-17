@@ -1021,7 +1021,9 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
         // PS2HOST_GPU_TEXDUMP=TBP (hex): each decode of a texture there, as the
         // GPU has it, to gpu_tex_<n>_<primitive>.bmp (the CPU's beside it as
         // cpu_tex_<n>.bmp) - what a draw sampled, against the GS model.
-        if (const char* want = std::getenv("PS2HOST_GPU_TEXDUMP")) {
+        // (getenv once: a texture decoded is common, and getenv takes a lock.)
+        static const char* const texdump = std::getenv("PS2HOST_GPU_TEXDUMP");
+        if (const char* want = texdump) {
             static int dumped = 0;
             if (tbp == u32(std::strtoul(want, nullptr, 16)) && dumped < 64) {
                 std::vector<u32> pixels;
@@ -1035,7 +1037,8 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
                 ++dumped;
             }
         }
-        if (std::getenv("PS2HOST_GPU_COUNT")) {
+        static const bool counting = std::getenv("PS2HOST_GPU_COUNT") != nullptr;
+        if (counting) {
             char key[96];
             std::snprintf(key, sizeof key, "psm %02X tbp %04X tbw %u %ux%u clutrows %d", unsigned(psm), unsigned(tbp),
                           unsigned(tbw), unsigned(tw), unsigned(th), int((clut_rows & ~b.clut_cpu) != 0));
