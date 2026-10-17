@@ -15,6 +15,8 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <atomic>
+#include <immintrin.h>
 #include <vector>
 
 #include "ps2host/disc.h"
@@ -1723,6 +1725,42 @@ const CpuVector kCpuVectors[] = {
 #include "iop_cpu_vectors.inc"
 };
 
+// The GS thread is woken for every packet the EE publishes: a publish just as
+// the thread goes to sleep (its head store still in the store buffer while it
+// read `sleeping` as false - x86 lets a load pass an earlier store) once left
+// it asleep with work queued, and the EE spun in SyncGs for ever (Stuntman's
+// movies, about one start in twelve). Publish and sync over and over, the
+// thread given time to fall asleep between them; a minute at most.
+void GsThreadWakesForEveryPacket() {
+    ps2host::StartGsThread();
+    std::atomic<bool> done{false};
+    std::atomic<u32> cycles{0};
+    std::thread worker([&] {
+        u64 seed = 0x9E3779B97F4A7C15ull;
+        for (u32 i = 0; i < 400000; ++i) {
+            ps2host::GsPrivileged(0x120000E0u, i);         // BGCOLOR: nothing drawn
+            ps2host::SyncGs();
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            for (u32 spin = u32(seed % 600); spin; --spin) _mm_pause();
+            cycles = i + 1;
+        }
+        done = true;
+    });
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!done && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    if (!done) {
+        std::fprintf(stderr, "FAIL: the GS thread slept with work queued: the EE waits for ever (after %u cycles)\n",
+                     unsigned(cycles.load()));
+        std::fflush(stderr);
+        std::_Exit(1);
+    }
+    worker.join();
+    ps2host::StopGsThread();
+    Check(true, "the GS thread is woken for every packet");
+}
+
 // vu_record=on in the PC settings: a played run records the vector units'
 // microprograms beside the settings, interpreted meanwhile; nothing added
 // otherwise.
@@ -2073,6 +2111,7 @@ int main() {
     IopPoolsAndLibraryCalls();
     IopSearchesTheDisc();
     PlaySettingsRecordVuPrograms();
+    GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;

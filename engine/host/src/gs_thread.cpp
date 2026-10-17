@@ -162,10 +162,18 @@ struct Feed {
 
     void Publish(u32 words) {
         head.store(head.load(std::memory_order_relaxed) + words, std::memory_order_release);
-        if (sleeping.load()) {
-            std::lock_guard<std::mutex> lock(mutex);
-            wake.notify_one();
-        }
+        // The head stored before `sleeping` is read: a release store may wait
+        // in the store buffer while the load passes it (x86 too), and the GS
+        // thread - `sleeping` set, the old head read - went to sleep with
+        // this packet queued, unwoken. Its side is a seq_cst store then a
+        // load; this fence is ours.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (sleeping.load()) Wake();
+    }
+
+    void Wake() {
+        std::lock_guard<std::mutex> lock(mutex);
+        wake.notify_one();
     }
 
     void Sync() {
@@ -174,8 +182,14 @@ struct Feed {
         Timed timed(Section::GsWait);
         for (int spins = 0; tail.load(std::memory_order_acquire) < target; ++spins) {
             Rethrow();
-            if (spins < 4096) Pause();
-            else std::this_thread::yield();
+            if (spins < 4096) {
+                Pause();
+            } else {
+                // Asleep with work queued should not be (Publish), and would
+                // be a wait for ever: woken then, whatever the cause.
+                if (sleeping.load()) Wake();
+                std::this_thread::yield();
+            }
         }
         Rethrow();
     }
