@@ -1508,6 +1508,134 @@ void IpuDecodesAndRetriesCleanly() {
           "IPU: BDEC goes over a slice's stuffing to the start code (SCD)");
 }
 
+// Runs an IPU command over `stream` (whole quadwords), sent by channel 4
+// (to the IPU, normal mode) as a game does - a macroblock can be longer
+// than the input FIFO - and gives what the output FIFO had, quadword by
+// quadword (as bytes); the slice's start code is left in the bitstream.
+std::vector<u8> IpuRun(u32 word, const std::vector<u8>& stream) {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 source = 0x01C00000u;
+    for (std::size_t i = 0; i < stream.size(); i += 4) {
+        u32 v = 0;
+        std::memcpy(&v, &stream[i], std::min<std::size_t>(4, stream.size() - i));
+        m.Write(source + u32(i), v, 4);
+    }
+    std::vector<u8> out;
+    m.Write(0x10002000u, 0, 4);                     // BCLR, BP 0
+    m.Write(0x1000B410u, source, 4);                // channel 4: MADR, QWC, CHCR (from memory, start)
+    m.Write(0x1000B420u, u32(stream.size() / 16), 4);
+    m.Write(0x1000B400u, 0x101u, 4);
+    m.Write(0x10002000u, word, 4);
+    for (int idle = 0; idle < 4;) {
+        const u32 ctrl = u32(m.Read(0x10002010u, 4));
+        if ((ctrl >> 4) & 0xF) {
+            const u64 lo = m.Read(0x10007000u, 8), hi = m.Read(0x10007008u, 8);
+            out.insert(out.end(), reinterpret_cast<const u8*>(&lo), reinterpret_cast<const u8*>(&lo) + 8);
+            out.insert(out.end(), reinterpret_cast<const u8*>(&hi), reinterpret_cast<const u8*>(&hi) + 8);
+            idle = 0;
+        } else {
+            ++idle;                                     // done, or waiting for data there is no more of
+        }
+    }
+    m.Write(0x1000B400u, 0, 4);                     // the channel stopped, whatever it had left
+    return out;
+}
+
+// IDEC on a slice made by hand: three intra macroblocks of flat blocks -
+// the first at the slice's start (DC reset), the second with quant (a new
+// quantiser_scale_code) and a luma DC of +1 that the blocks after it keep,
+// the third after a skip (increment 2: DC reset again) - then the stuffing
+// and a start code, where the command ends (SCD). Out as RGB32 (Y 128 is
+// grey 130: CSC's (0x95 (Y - 16) >> 6 + 1) >> 1), and as RGB16, dithered.
+void IpuIdecDecodesASlice() {
+    ps2host::InstallIpu();
+    ps2host::Memory& m = ps2host::GuestMemory();
+    m.Write(0x10002010u, 1u << 30, 4);              // reset
+    m.Write(0x10002010u, 0, 4);                     // MPEG-2, IDP 0 (8 bits), zig-zag, B.14
+    m.Write(0x10002000u, 0x90000000u, 4);           // SETTH 0, 0: alpha 0x80
+    const std::string flat = std::string("10010") + "10010" + "10010" + "10010" + "0010" + "0010";
+    const std::string plus = std::string("00110") + "10010" + "10010" + "10010" + "0010" + "0010";
+    const std::string bits = std::string("1") + "1" + flat +        // increment 1, intra
+                             "1" + "01" + "00010" + plus +          // increment 1, intra + quant, QSC 2
+                             "011" + "1" + flat;                    // increment 2, intra
+    std::string all = bits + std::string((8 - bits.size() % 8) % 8, '0') + "00000000" "00000000" "00000001" "10110011";
+    std::vector<u8> stream((all.size() + 7) / 8, 0);
+    for (std::size_t i = 0; i < all.size(); ++i)
+        if (all[i] == '1') stream[i / 8] |= u8(0x80 >> (i % 8));
+    stream.resize((stream.size() + 15) / 16 * 16 + 32, 0);
+    const std::vector<u8> rgb32 = IpuRun(0x10010000u, stream);   // IDEC, QSC 1, RGB32
+    auto pixel = [&](const std::vector<u8>& out, std::size_t macroblock, std::size_t i) {
+        u32 v = 0;
+        std::memcpy(&v, &out[macroblock * 1024 + i * 4], 4);
+        return v;
+    };
+    Check(rgb32.size() == 3 * 1024, "IPU: IDEC gives each macroblock of the slice, 256 RGB32 pixels each");
+    bool same = rgb32.size() == 3 * 1024;
+    for (std::size_t mb = 0; same && mb < 3; ++mb)
+        for (std::size_t i = 0; i < 256; ++i) same &= pixel(rgb32, mb, i) == pixel(rgb32, mb, 0);
+    Check(same && pixel(rgb32, 0, 0) == 0x80828282u, "IPU: IDEC's flat block at the slice's start: Y 128, grey");
+    Check(same && pixel(rgb32, 1, 0) == 0x80848484u, "IPU: the DC predictor runs on through the blocks (Y 129)");
+    Check(same && pixel(rgb32, 2, 0) == 0x80828282u, "IPU: reset again after a skipped macroblock");
+    Check(!((m.Read(0x10002000u, 8) >> 63) & 1) && ((m.Read(0x10002010u, 4) >> 15) & 1) &&
+              u32(m.Read(0x10002030u, 4)) == 0x000001B3u,
+          "IPU: IDEC ends at the start code (SCD), left before it");
+    const std::vector<u8> rgb16 = IpuRun(0x1C010000u, stream);   // IDEC, RGB16, dithered
+    u16 first = 0, second = 0;
+    if (rgb16.size() == 3 * 512) {
+        std::memcpy(&first, &rgb16[0], 2);
+        std::memcpy(&second, &rgb16[2], 2);
+    }
+    // Grey 130 dithered by -4 (row 0, column 0) is 126 >> 3 = 15, by 0 (column 1) 130 >> 3 = 16.
+    Check(rgb16.size() == 3 * 512 && first == (0x8000 | 15 | 15 << 5 | 15 << 10) &&
+              second == (0x8000 | 16 | 16 << 5 | 16 << 10),
+          "IPU: IDEC to RGB16, dithered");
+    const std::vector<u8> plain16 = IpuRun(0x18010000u, stream);  // RGB16, not dithered
+    u16 flat16 = 0;
+    if (plain16.size() == 3 * 512) std::memcpy(&flat16, &plain16[0], 2);
+    Check(flat16 == (0x8000 | 16 | 16 << 5 | 16 << 10), "IPU: IDEC to RGB16, not dithered");
+}
+
+// PS2HOST_IDEC_CASE=<file>: IDEC over real slices, for engine/tools/idec_check.py
+// (an independent decoder's reference, outside the build). The file: u32
+// IPU_CTRL, the 64 intra matrix bytes as transmitted, u32 slices, then for
+// each u32 IDEC command word, u32 bytes and the bytes (from the slice's
+// header, its next start code after). Written to <file>.out: each slice's
+// output, one after the other.
+void IpuIdecExternalCase() {
+    const char* path = std::getenv("PS2HOST_IDEC_CASE");
+    if (!path) return;
+    std::ifstream in(path, std::ios::binary);
+    std::vector<u8> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::size_t at = 0;
+    auto word = [&] {
+        u32 v = 0;
+        std::memcpy(&v, &data.at(at + 3) - 3, 4);
+        at += 4;
+        return v;
+    };
+    ps2host::InstallIpu();
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const u32 ctrl = word();
+    m.Write(0x10002010u, 1u << 30, 4);
+    m.Write(0x10002010u, ctrl, 4);
+    m.Write(0x10002000u, 0x90000000u, 4);           // SETTH 0, 0
+    std::vector<u8> matrix(data.begin() + at, data.begin() + at + 64);
+    at += 64;
+    matrix.resize(96, 0);
+    IpuRun(0x50000000u, matrix);                    // SETIQ, intra
+    const u32 slices = word();
+    std::ofstream out(std::string(path) + ".out", std::ios::binary);
+    for (u32 s = 0; s < slices; ++s) {
+        const u32 command = word(), size = word();
+        std::vector<u8> slice(data.begin() + at, data.begin() + at + size);
+        at += size;
+        slice.resize((slice.size() + 15) / 16 * 16 + 32, 0);
+        const std::vector<u8> pixels = IpuRun(command, slice);
+        out.write(reinterpret_cast<const char*>(pixels.data()), std::streamsize(pixels.size()));
+    }
+    std::printf("IDEC case: %u slices decoded to %s.out\n", slices, path);
+}
+
 // MAX and MINI hand back an operand as it is: Burnout 3's car microcode
 // builds its GIF tag's REGS (0x412, a denormal as a float) with LOI and MAXI;
 // cleaned to 0, every vertex went to PRIM and no car was drawn.
@@ -1863,6 +1991,10 @@ void SpuDecodesAdpcmAndPlaysAVoice() {
 }
 
 int main() {
+    if (std::getenv("PS2HOST_IDEC_CASE")) {          // engine/tools/idec_check.py's case only
+        IpuIdecExternalCase();
+        return 0;
+    }
     MirrorsReachTheSameRam();
     LoadsExtendAsTheEeDoes();
     OutsideMemoryFaults();
@@ -1907,6 +2039,7 @@ int main() {
     VuMaxKeepsADenormal();
     MmiLanesAreScalar();
     IpuDecodesAndRetriesCleanly();
+    IpuIdecDecodesASlice();
     IopInstructionsMatchTheR5900();
     IopPoolsAndLibraryCalls();
     IopSearchesTheDisc();

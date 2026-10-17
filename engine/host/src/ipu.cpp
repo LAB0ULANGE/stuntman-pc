@@ -22,9 +22,9 @@
  * output FIFO, which channel 3 drains; a step waits while 8 quadwords sit
  * there undrained, as the 8-quadword FIFO would stall the decoder.
  *
- * Commands: BCLR, BDEC, VDEC, FDEC, SETIQ, SETVQ, CSC, PACK, SETTH. IDEC
- * (a whole intra slice to RGB) is not modelled: it is reported and ends at
- * once.
+ * Commands: BCLR, IDEC, BDEC, VDEC, FDEC, SETIQ, SETVQ, CSC, PACK, SETTH.
+ * IDEC decodes an intra slice's macroblocks, one a step, each to RGB as CSC
+ * converts (EE User's Manual 8.3.2; ISO/IEC 13818-2 6.2.5, 7.2.1).
  */
 
 #include "ps2host/ipu.h"
@@ -237,6 +237,8 @@ public:
     u32 command = 0;
     bool busy = false;
     u32 left = 0;                       // CSC and PACK: macroblocks still to do
+    bool idec_started = false;          // IDEC: past its FB and first macroblock
+    u32 idec_qsc = 0;                   // IDEC: the quantiser_scale_code now
 
     // The channels.
     Source to;                          // channel 4, while it runs
@@ -479,11 +481,10 @@ public:
             busy = false;
             return;
         }
-        if (code == 1) {
-            static bool reported = false;
-            if (!reported) std::fprintf(stderr, "[ipu] IDEC is not modelled (the command ends at once)\n");
-            reported = true;
-            busy = false;
+        if (code == 1) {                                // IDEC: the slice's quantiser_scale_code
+            idec_started = false;
+            idec_qsc = (word >> 16) & 0x1F;
+            if ((word >> 25) & 1) Note("ipu idec sgn", "IPU: IDEC with SGN set (no offset applied) - TO RECHECK");
         }
     }
 
@@ -505,6 +506,7 @@ public:
         std::copy(dc_pred, dc_pred + 3, dc_before);
         try {
             switch (code) {
+                case 1: Idec(r); break;
                 case 2: Bdec(r); break;
                 case 3: Vdec(r); break;
                 case 4: Fdec(r); break;
@@ -645,9 +647,10 @@ public:
             index += run;
             if (index > 63) { ctrl |= 1u << 14; break; }
             const int position = scan[index];
+            const s32 weight = matrix[index];
             const s32 magnitude = level < 0 ? -level : level;
-            s32 value = intra ? (magnitude * s32(scale) * matrix[index]) >> 4
-                              : ((2 * magnitude + 1) * s32(scale) * matrix[index]) >> 5;
+            s32 value = intra ? (magnitude * s32(scale) * weight) >> 4
+                              : ((2 * magnitude + 1) * s32(scale) * weight) >> 5;
             if (mpeg1 && value) value = (value - 1) | 1;                // oddification
             if (level < 0) value = -value;
             coefficients[position] = std::clamp(value, -2048, 2047);
@@ -658,6 +661,76 @@ public:
             for (int i = 0; i < 64; ++i) sum += coefficients[i];
             if ((sum & 1) == 0) coefficients[63] ^= 1;
         }
+    }
+
+    /* A start code next (23 zero bits): the slice's end. To the byte boundary
+       and over the zero bytes, the position left at 00 00 01 and SCD set (or
+       ECD at anything else); true if so. */
+    bool SliceEnds(Reader& r) {
+        if (r.Peek(23) != 0) return false;
+        r.bit = (r.bit + 7) & ~u64(7);
+        for (;;) {
+            const u32 next = r.Peek(24);
+            if (next != 0) {
+                ctrl |= next == 1 ? (1u << 15) : (1u << 14);
+                return true;
+            }
+            r.Skip(8);
+        }
+    }
+
+    /* IDEC, one macroblock: macroblock_address_increment (stuffing, escapes),
+       macroblock_type (B.2: intra, intra + quant), dct_type when DTD asks,
+       quantiser_scale_code with quant, six intra blocks - then to RGB as CSC
+       does, by OFM and DTE. The DC predictors start the slice reset, and are
+       reset again where macroblocks are skipped (an increment above 1, 7.2.1).
+       The command ends at the next start code, SCD set. Parsed whole before
+       anything is kept, a step being all or nothing. */
+    void Idec(Reader& r) {
+        const bool first = !idec_started;
+        if (first) r.Skip(Fb());
+        u32 increment = 0;
+        for (;;) {
+            u32 length = 0;
+            const s32 value = r.Vlc(AddressIncrement(), &length);
+            if (!length) { ctrl |= 1u << 14; busy = false; return; }
+            if (value == 0x22) continue;                 // stuffing (MPEG-1)
+            if (value == 0x23) { increment += 33; continue; }
+            increment += u32(value);
+            break;
+        }
+        if (first || increment > 1) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128 << ((ctrl >> 16) & 3);
+        u32 length = 0;
+        const s32 type = r.Vlc(MacroblockType(1), &length);
+        if (!length) { ctrl |= 1u << 14; busy = false; return; }
+        const bool field = ((command >> 24) & 1) ? r.Get(1) != 0 : false;
+        u32 qsc = idec_qsc;
+        if (type & 0x10) qsc = r.Get(5);
+        const u32 scale = ((ctrl >> 22) & 1) ? kNonLinearScale[qsc] : qsc << 1;
+        u8 raw[384];
+        for (int b = 0; b < 6; ++b) {
+            s32 coefficients[64], pixels[64];
+            Block(r, true, b < 4 ? 0 : b - 3, scale, coefficients);
+            Idct(coefficients, pixels);
+            for (s32& p : pixels) p = std::clamp(p, 0, 255);
+            if (b < 4) {
+                const int x0 = (b & 1) * 8;
+                for (int row = 0; row < 8; ++row) {
+                    // Frame DCT: blocks are the quarters; field DCT: blocks 0
+                    // and 1 the even lines, 2 and 3 the odd.
+                    const int line = field ? (row * 2 + (b >> 1)) : (row + (b >> 1) * 8);
+                    for (int col = 0; col < 8; ++col) raw[line * 16 + x0 + col] = u8(pixels[row * 8 + col]);
+                }
+            } else {
+                for (int i = 0; i < 64; ++i) raw[256 + (b - 4) * 64 + i] = u8(pixels[i]);
+            }
+        }
+        ctrl &= ~(1u << 15);
+        const bool ends = SliceEnds(r);
+        idec_started = true;
+        idec_qsc = qsc;
+        ToRgb(raw, (command >> 27) & 1, (command >> 26) & 1);
+        if (ends) busy = false;
     }
 
     void Bdec(Reader& r) {
@@ -746,7 +819,13 @@ public:
             raw[i + 2] = u8(v >> 8);
             raw[i + 3] = u8(v);
         }
-        const bool rgb16 = (command >> 27) & 1, dither = (command >> 26) & 1;
+        ToRgb(raw, (command >> 27) & 1, (command >> 26) & 1);
+        if (--left == 0) busy = false;
+    }
+
+    /* A macroblock's YCbCr 4:2:0 (raw: Y 16 x 16, Cb 8 x 8, Cr 8 x 8) to RGB:
+       RGB32 (alpha from the thresholds) or RGB16 (dithered or not). */
+    void ToRgb(const u8 raw[384], bool rgb16, bool dither) {
         static const int kDither[4][4] = {{-4, 0, -3, 1}, {2, -2, 3, -1}, {-3, 1, -4, 0}, {3, -1, 2, -2}};
         u32 rgba[256];
         u16 packed[256];
@@ -780,7 +859,6 @@ public:
             }
         if (rgb16) Emit(reinterpret_cast<const u8*>(packed), sizeof packed);
         else Emit(reinterpret_cast<const u8*>(rgba), sizeof rgba);
-        if (--left == 0) busy = false;
     }
 
     void Pack(Reader& r) {
