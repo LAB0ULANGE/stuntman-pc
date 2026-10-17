@@ -1541,12 +1541,15 @@ std::vector<u8> IpuRun(u32 word, const std::vector<u8>& stream) {
     return out;
 }
 
-// IDEC on a slice made by hand: three intra macroblocks of flat blocks -
-// the first at the slice's start (DC reset), the second with quant (a new
-// quantiser_scale_code) and a luma DC of +1 that the blocks after it keep,
-// the third after a skip (increment 2: DC reset again) - then the stuffing
-// and a start code, where the command ends (SCD). Out as RGB32 (Y 128 is
-// grey 130: CSC's (0x95 (Y - 16) >> 6 + 1) >> 1), and as RGB16, dithered.
+// IDEC on a picture made by hand, one IDEC for its two slices as a game
+// gives it: the first slice's macroblocks - the first at its start (DC
+// reset), the second with quant (a new quantiser_scale_code) and a luma DC
+// of +1 that the blocks after it keep, the third after a skip (increment 2:
+// DC reset again) and +1 - then the stuffing, the second slice's start code
+// and header (quantiser_scale_code, extra_bit_slice), whose macroblock
+// starts from the DC reset again; then a start code that is not a slice's,
+// where the command ends (SCD). Out as RGB32 (Y 128 is grey 130: CSC's
+// (0x95 (Y - 16) >> 6 + 1) >> 1), and as RGB16, dithered and not.
 void IpuIdecDecodesASlice() {
     ps2host::InstallIpu();
     ps2host::Memory& m = ps2host::GuestMemory();
@@ -1557,8 +1560,12 @@ void IpuIdecDecodesASlice() {
     const std::string plus = std::string("00110") + "10010" + "10010" + "10010" + "0010" + "0010";
     const std::string bits = std::string("1") + "1" + flat +        // increment 1, intra
                              "1" + "01" + "00010" + plus +          // increment 1, intra + quant, QSC 2
-                             "011" + "1" + flat;                    // increment 2, intra
-    std::string all = bits + std::string((8 - bits.size() % 8) % 8, '0') + "00000000" "00000000" "00000001" "10110011";
+                             "011" + "1" + plus;                    // increment 2, intra, +1
+    auto stuffed = [](std::string b) { return b + std::string((8 - b.size() % 8) % 8, '0'); };
+    const std::string slice2 = std::string("00000000" "00000000" "00000001" "00000010") +   // slice 2
+                               "00011" + "0" +                                          // QSC 3, no extra
+                               "1" + "1" + flat;                                        // increment 1, intra
+    std::string all = stuffed(stuffed(bits) + slice2) + "00000000" "00000000" "00000001" "10110011";
     std::vector<u8> stream((all.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < all.size(); ++i)
         if (all[i] == '1') stream[i / 8] |= u8(0x80 >> (i % 8));
@@ -1569,29 +1576,30 @@ void IpuIdecDecodesASlice() {
         std::memcpy(&v, &out[macroblock * 1024 + i * 4], 4);
         return v;
     };
-    Check(rgb32.size() == 3 * 1024, "IPU: IDEC gives each macroblock of the slice, 256 RGB32 pixels each");
-    bool same = rgb32.size() == 3 * 1024;
-    for (std::size_t mb = 0; same && mb < 3; ++mb)
+    Check(rgb32.size() == 4 * 1024, "IPU: IDEC gives each macroblock of the picture, 256 RGB32 pixels each");
+    bool same = rgb32.size() == 4 * 1024;
+    for (std::size_t mb = 0; same && mb < 4; ++mb)
         for (std::size_t i = 0; i < 256; ++i) same &= pixel(rgb32, mb, i) == pixel(rgb32, mb, 0);
     Check(same && pixel(rgb32, 0, 0) == 0x80828282u, "IPU: IDEC's flat block at the slice's start: Y 128, grey");
     Check(same && pixel(rgb32, 1, 0) == 0x80848484u, "IPU: the DC predictor runs on through the blocks (Y 129)");
-    Check(same && pixel(rgb32, 2, 0) == 0x80828282u, "IPU: reset again after a skipped macroblock");
+    Check(same && pixel(rgb32, 2, 0) == 0x80848484u, "IPU: reset again after a skipped macroblock (128 + 1)");
+    Check(same && pixel(rgb32, 3, 0) == 0x80828282u, "IPU: IDEC goes on into the next slice, its DC reset");
     Check(!((m.Read(0x10002000u, 8) >> 63) & 1) && ((m.Read(0x10002010u, 4) >> 15) & 1) &&
               u32(m.Read(0x10002030u, 4)) == 0x000001B3u,
           "IPU: IDEC ends at the start code (SCD), left before it");
     const std::vector<u8> rgb16 = IpuRun(0x1C010000u, stream);   // IDEC, RGB16, dithered
     u16 first = 0, second = 0;
-    if (rgb16.size() == 3 * 512) {
+    if (rgb16.size() == 4 * 512) {
         std::memcpy(&first, &rgb16[0], 2);
         std::memcpy(&second, &rgb16[2], 2);
     }
     // Grey 130 dithered by -4 (row 0, column 0) is 126 >> 3 = 15, by 0 (column 1) 130 >> 3 = 16.
-    Check(rgb16.size() == 3 * 512 && first == (0x8000 | 15 | 15 << 5 | 15 << 10) &&
+    Check(rgb16.size() == 4 * 512 && first == (0x8000 | 15 | 15 << 5 | 15 << 10) &&
               second == (0x8000 | 16 | 16 << 5 | 16 << 10),
           "IPU: IDEC to RGB16, dithered");
     const std::vector<u8> plain16 = IpuRun(0x18010000u, stream);  // RGB16, not dithered
     u16 flat16 = 0;
-    if (plain16.size() == 3 * 512) std::memcpy(&flat16, &plain16[0], 2);
+    if (plain16.size() == 4 * 512) std::memcpy(&flat16, &plain16[0], 2);
     Check(flat16 == (0x8000 | 16 | 16 << 5 | 16 << 10), "IPU: IDEC to RGB16, not dithered");
 }
 

@@ -23,8 +23,9 @@
  * there undrained, as the 8-quadword FIFO would stall the decoder.
  *
  * Commands: BCLR, IDEC, BDEC, VDEC, FDEC, SETIQ, SETVQ, CSC, PACK, SETTH.
- * IDEC decodes an intra slice's macroblocks, one a step, each to RGB as CSC
- * converts (EE User's Manual 8.3.2; ISO/IEC 13818-2 6.2.5, 7.2.1).
+ * IDEC decodes an intra picture's macroblocks, one a step, slice after
+ * slice, each to RGB as CSC converts (EE User's Manual 8.3.2; ISO/IEC
+ * 13818-2 6.2.4, 6.2.5, 7.2.1).
  */
 
 #include "ps2host/ipu.h"
@@ -244,6 +245,7 @@ public:
     bool busy = false;
     u32 left = 0;                       // CSC and PACK: macroblocks still to do
     bool idec_started = false;          // IDEC: past its FB and first macroblock
+    bool idec_slice = false;            // IDEC: a slice header just read, the DC to reset
     u32 idec_qsc = 0;                   // IDEC: the quantiser_scale_code now
 
     // The channels.
@@ -489,6 +491,7 @@ public:
         }
         if (code == 1) {                                // IDEC: the slice's quantiser_scale_code
             idec_started = false;
+            idec_slice = false;
             idec_qsc = (word >> 16) & 0x1F;
             if ((word >> 25) & 1) Note("ipu idec sgn", "IPU: IDEC with SGN set (no offset applied) - TO RECHECK");
         }
@@ -672,32 +675,52 @@ public:
         }
     }
 
-    /* A start code next (23 zero bits): the slice's end. To the byte boundary
-       and over the zero bytes, the position left at 00 00 01 and SCD set (or
-       ECD at anything else); true if so. */
-    bool SliceEnds(Reader& r) {
+    /* After a macroblock, a start code next (23 zero bits): to the byte
+       boundary and over the zero bytes. A slice's (0x101-0x1AF) is IDEC's
+       to go on with - its header read (6.2.4: quantiser_scale_code, then
+       extra_bit_slice and its byte while it is 1, which reads MPEG-2's
+       intra_slice_flag, intra_slice and reserved bits as well), *qsc set,
+       false. Any other ends the picture: the position left at 00 00 01, SCD
+       set (ECD at anything else but a start code), true. */
+    bool PictureEnds(Reader& r, u32* qsc, bool* slice) {
         if (r.Peek(23) != 0) return false;
         r.bit = (r.bit + 7) & ~u64(7);
         for (;;) {
             const u32 next = r.Peek(24);
             if (next != 0) {
-                ctrl |= next == 1 ? (1u << 15) : (1u << 14);
-                return true;
+                if (next != 1) {
+                    ctrl |= 1u << 14;
+                    return true;
+                }
+                break;
             }
             r.Skip(8);
         }
+        const u32 code = r.Peek(32) & 0xFF;
+        if (code < 0x01 || code > 0xAF) {
+            ctrl |= 1u << 15;
+            return true;
+        }
+        r.Skip(32);
+        *qsc = r.Get(5);
+        while (r.Get(1)) r.Skip(8);
+        *slice = true;
+        return false;
     }
 
     /* IDEC, one macroblock: macroblock_address_increment (stuffing, escapes),
        macroblock_type (B.2: intra, intra + quant), dct_type when DTD asks,
        quantiser_scale_code with quant, six intra blocks - then to RGB as CSC
-       does, by OFM and DTE. The DC predictors start the slice reset, and are
-       reset again where macroblocks are skipped (an increment above 1, 7.2.1).
-       The command ends at the next start code, SCD set. Parsed whole before
-       anything is kept, a step being all or nothing. */
+       does, by OFM and DTE. The DC predictors are reset at each slice's start
+       and where macroblocks are skipped (an increment above 1, 7.2.1). A game
+       gives one IDEC a picture, its first slice's header skipped by FB and
+       QSC its quantiser_scale_code: the slices after it are IDEC's own
+       (PictureEnds), and the command ends at the next other start code, SCD
+       set. Parsed whole before anything is kept, a step being all or
+       nothing. */
     void Idec(Reader& r) {
-        const bool first = !idec_started;
-        if (first) r.Skip(Fb());
+        const bool first = !idec_started || idec_slice;
+        if (!idec_started) r.Skip(Fb());
         u32 increment = 0;
         for (;;) {
             u32 length = 0;
@@ -735,8 +758,10 @@ public:
             }
         }
         ctrl &= ~(1u << 15);
-        const bool ends = SliceEnds(r);
+        bool slice = false;
+        const bool ends = PictureEnds(r, &qsc, &slice);
         idec_started = true;
+        idec_slice = slice;
         idec_qsc = qsc;
         ToRgb(raw, (command >> 27) & 1, (command >> 26) & 1);
         if (ends) busy = false;

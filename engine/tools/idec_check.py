@@ -2,9 +2,10 @@
 
 A verification script, outside the build: it needs PyAV (FFmpeg) and numpy,
 which the engine does not. It encodes a test picture as MPEG-2 intra frames
-with FFmpeg's encoder, cuts the elementary stream into slices, has the
-host's IDEC decode them (ps2host_tests.exe with PS2HOST_IDEC_CASE, which
-runs each slice through the IPU's input FIFO), and compares the macroblocks
+with FFmpeg's encoder, cuts the elementary stream's picture out, has the
+host's IDEC decode it as a game does - one IDEC for the picture, its slices
+after the first IDEC's own to read (ps2host_tests.exe with
+PS2HOST_IDEC_CASE, which sends it by DMA channel 4) - and compares the macroblocks
 with FFmpeg's own decoding of the same stream, put through the same colour
 conversion (the IPU's CSC, EE User's Manual 8.3.6). The IDCTs differ (the
 host's is IEEE 1180's double-precision reference, FFmpeg's an integer one)
@@ -161,7 +162,13 @@ def parse(es):
             command = 0x10000000 | header | (qsc << 16) | ((0 if frame_dct else 1) << 24)
             slices.append((command, body))
     ctrl = (idp << 16) | (alternate << 20) | (ivf << 21) | (qst << 22) | (1 << 24)
-    return ctrl, matrix, slices
+    # As a game gives it: one IDEC for the picture, from its first slice's
+    # header (FB and QSC its), the slices after it IDEC's own to read.
+    first_at = next(at for at, code in codes if 0x01 <= code <= 0xAF)
+    last = max(i for i, (at, code) in enumerate(codes) if 0x01 <= code <= 0xAF)
+    end = codes[last + 1][0] + 4 if last + 1 < len(codes) else len(es)
+    body = es[first_at + 4:end] + (b"" if last + 1 < len(codes) else b"\x00\x00\x01\xB7")
+    return ctrl, matrix, slices, [(slices[0][0], body)]
 
 
 def csc(y, cb, cr):
@@ -194,13 +201,13 @@ def check(tests_exe, name, options, interlaced, keep):
     yuv = picture(width, height, seed=len(name))
     es = encode(yuv, width, height, options, interlaced)
     reference = decode(es)
-    ctrl, matrix, slices = parse(es)
+    ctrl, matrix, slices, whole = parse(es)
     with tempfile.TemporaryDirectory() as work:
         directory = keep or work
         case = os.path.join(directory, name + ".idec")
         with open(case, "wb") as f:
-            f.write(struct.pack("<I", ctrl) + bytes(matrix) + struct.pack("<I", len(slices)))
-            for command, body in slices:
+            f.write(struct.pack("<I", ctrl) + bytes(matrix) + struct.pack("<I", len(whole)))
+            for command, body in whole:
                 f.write(struct.pack("<II", command, len(body)) + body)
         env = dict(os.environ, PS2HOST_IDEC_CASE=case)
         subprocess.run([tests_exe], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
