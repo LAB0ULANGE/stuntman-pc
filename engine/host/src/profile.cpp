@@ -24,6 +24,7 @@
 #include <dbghelp.h>
 #include <intrin.h>
 #include <timeapi.h>
+#include <tlhelp32.h>
 #endif
 
 namespace ps2host {
@@ -496,11 +497,106 @@ LONG WINAPI CrashFilter(EXCEPTION_POINTERS* info) {
 
 void InstallCrashReport() { SetUnhandledExceptionFilter(CrashFilter); }
 
+std::string HostThreadStacks() {
+    constexpr int kDepth = 24;
+    struct Stack {
+        DWORD id;
+        std::wstring name;
+        std::vector<DWORD64> frames;
+    };
+    std::vector<Stack> stacks;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return "";
+    THREADENTRY32 entry{};
+    entry.dwSize = sizeof entry;
+    const DWORD self = GetCurrentThreadId(), process_id = GetCurrentProcessId();
+    for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
+        if (entry.th32OwnerProcessID != process_id || entry.th32ThreadID == self) continue;
+        HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION,
+                                   FALSE, entry.th32ThreadID);
+        if (!thread) continue;
+        Stack stack{entry.th32ThreadID, L"", {}};
+        PWSTR description = nullptr;
+        if (SUCCEEDED(GetThreadDescription(thread, &description)) && description) {
+            stack.name = description;
+            LocalFree(description);
+        }
+        // Suspended, nothing here allocates: the walk goes into a fixed array.
+        DWORD64 frames[kDepth] = {};
+        int n = 0;
+        CONTEXT ctx{};
+        ctx.ContextFlags = CONTEXT_FULL;
+        if (SuspendThread(thread) != DWORD(-1)) {
+            if (GetThreadContext(thread, &ctx)) {
+                frames[n++] = ctx.Rip;
+                while (n < kDepth) {
+                    DWORD64 base = 0;
+                    PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(ctx.Rip, &base, nullptr);
+                    if (function) {
+                        void* handler = nullptr;
+                        DWORD64 frame = 0;
+                        RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, ctx.Rip, function, &ctx, &handler, &frame, nullptr);
+                    } else {
+                        ctx.Rip = *reinterpret_cast<const DWORD64*>(ctx.Rsp);
+                        ctx.Rsp += 8;
+                    }
+                    if (!ctx.Rip) break;
+                    frames[n++] = ctx.Rip;
+                }
+            }
+            ResumeThread(thread);
+        }
+        CloseHandle(thread);
+        stack.frames.assign(frames, frames + n);
+        stacks.push_back(std::move(stack));
+    }
+    CloseHandle(snapshot);
+    HANDLE process = GetCurrentProcess();
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    char exe_dir[MAX_PATH] = "";
+    GetModuleFileNameA(nullptr, exe_dir, MAX_PATH);
+    if (char* slash = std::strrchr(exe_dir, '\\')) *slash = 0;
+    SymInitialize(process, exe_dir, TRUE);
+    std::string out = "host threads (native stacks, innermost first):\n";
+    for (const Stack& stack : stacks) {
+        char head[160];
+        std::snprintf(head, sizeof head, "  thread %lu %ls\n", stack.id, stack.name.c_str());
+        out += head;
+        for (DWORD64 address : stack.frames) {
+            alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256];
+            SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+            symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+            symbol->MaxNameLen = 255;
+            DWORD64 displacement = 0;
+            IMAGEHLP_LINE64 line{};
+            line.SizeOfStruct = sizeof line;
+            DWORD line_displacement = 0;
+            const bool named = SymFromAddr(process, address, &displacement, symbol);
+            const bool lined = SymGetLineFromAddr64(process, address, &line_displacement, &line);
+            // The module and the offset in it, for a frame no symbol names.
+            const DWORD64 base = SymGetModuleBase64(process, address);
+            char module[MAX_PATH] = "?";
+            if (base) {
+                GetModuleFileNameA(reinterpret_cast<HMODULE>(base), module, MAX_PATH);
+                if (const char* slash = std::strrchr(module, '\\')) std::memmove(module, slash + 1, std::strlen(slash));
+            }
+            char text[640];
+            std::snprintf(text, sizeof text, "    %s+0x%llX %s%s%s:%lu\n", module,
+                          static_cast<unsigned long long>(address - base), named ? symbol->Name : "?",
+                          lined ? "  " : "", lined ? line.FileName : "", lined ? line.LineNumber : 0ul);
+            out += text;
+        }
+    }
+    SymCleanup(process);
+    return out;
+}
+
 #else
 
 void InstallCrashReport() {}
 void StartSampler() {}
 std::string SampleReport(int) { return ""; }
+std::string HostThreadStacks() { return ""; }
 
 #endif
 

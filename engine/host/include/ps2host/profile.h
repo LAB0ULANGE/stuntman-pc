@@ -54,6 +54,10 @@ void SampleFrame(unsigned long long frame);
    gives the guest's call stacks too. */
 void SampleOnly(unsigned long long from_ns, unsigned long long to_ns);
 std::string SampleReport(int top = 30);
+/* Every other thread of the process, stopped a moment each: its native call
+   stack, named from the symbols beside the executable - for a run stuck in
+   host code (the watchdog's report), where no guest loop head comes. */
+std::string HostThreadStacks();
 
 }  // namespace ps2host
 

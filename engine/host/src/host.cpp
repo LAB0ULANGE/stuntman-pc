@@ -553,8 +553,11 @@ public:
                         std::fprintf(stderr, "EE RAM written to %s\n", path);
                     }
                 }
-                // The IOP's threads too (read while it runs: a diagnostic, last).
+                // The IOP's threads too (read while it runs: a diagnostic, last),
+                // and where each of the host's own is.
                 std::fprintf(stderr, "%s", iop::Report().c_str());
+                std::fflush(nullptr);
+                std::fprintf(stderr, "%s", HostThreadStacks().c_str());
                 std::fflush(nullptr);
                 std::_Exit(3);
             }
