@@ -595,6 +595,8 @@ bool Gs::Picture(std::vector<u32>* pixels, u32* width, u32* height) const {
     return true;
 }
 
+bool Gs::FieldMode() const { return Bits(smode2_, 0, 1) && Bits(smode2_, 1, 1); }
+
 u32 Gs::ShownLines() const {
     const int circuit = Bits(pmode_, 1, 1) || (!Bits(pmode_, 0, 1) && dispfb_[1]) ? 1 : 0;
     const u64 disp = display_[circuit];

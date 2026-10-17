@@ -283,6 +283,12 @@ bool Gs::Displayed(u32* fbp, u32* fbw, u32* psm) const {
     return *fbw != 0;
 }
 
+u32 Gs::DisplayedDby() const {
+    int circuit = Bits(pmode_, 1, 1) ? 1 : Bits(pmode_, 0, 1) ? 0 : -1;
+    if (circuit < 0) circuit = dispfb_[1] ? 1 : 0;
+    return Bits(dispfb_[circuit], 43, 11);
+}
+
 u32 Gs::FramePixel(u32 fbp, u32 fbw, u32 psm, u32 x, u32 y) const {
     Finish();
     const u32 c = memory.Read(fbp * 32, fbw, x, y, psm);

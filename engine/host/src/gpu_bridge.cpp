@@ -1538,9 +1538,31 @@ void Rescale(Bridge& b, u32 scale) {
     std::fprintf(stderr, "[gpu] internal resolution: %ux\n", unsigned(scale));
 }
 
-void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns) {
+void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
     u32 fbp = 0, fbw = 0, psm = 0;
-    if (g_bridge && gs::TheGs().Displayed(&fbp, &fbw, &psm)) {
+    // Field mode, woven (gs.weave: --deinterlace, the deinterlace setting):
+    // this field on the lines of the parity the game drew it for, the one
+    // before on the others, the whole picture shown (Gs::Picture's weave).
+    gs::Gs& gs = gs::TheGs();
+    if (g_bridge && gs.weave && gs.Displayed(&fbp, &fbw, &psm)) {
+        const u32 lines = gs.ShownLines();
+        auto found = g_bridge->owned.find(std::make_tuple(fbp, fbw, psm, false));
+        std::uint64_t image = 0;
+        int layout = 0;
+        u32 w = 0, h = 0;
+        const u32 k = g_bridge->renderer->Scale();
+        if (gs.FieldMode() && lines <= 512 && found != g_bridge->owned.end() && !found->second.stale &&
+            g_bridge->renderer->WeaveField(fbp, fbw, psm, gs.DisplayedDby(), lines, u32(frame + 1) & 1, &image,
+                                           &layout, &w, &h)) {
+            static u64 shown_serial = 0;
+            CountPresentedPicture(found->second.drawn_serial != shown_serial);
+            shown_serial = found->second.drawn_serial;
+            if (due_ns) display.PresentImageAt(image, layout, std::min(w, 640u * k), h, due_ns);
+            else display.PresentImage(image, layout, std::min(w, 640u * k), h);
+            return;
+        }
+    }
+    if (g_bridge && gs.Displayed(&fbp, &fbw, &psm)) {
         auto found = g_bridge->owned.find(std::make_tuple(fbp, fbw, psm, false));
         std::uint64_t image = 0;
         int layout = 0;
@@ -1658,7 +1680,17 @@ bool StartGpuRenderer(std::string* error, GpuMode mode, bool show) {
             if (scale != g_bridge->renderer->Scale()) Rescale(*g_bridge, scale);
             if (ps2gpu::Display* display = WindowDisplay()) {
                 const bool pace = !VirtualClock() && SettingOn("frame_pacing", true);    // (PC SETTINGS)
-                PresentGpuPicture(*display, pace ? FrameDue(frame) : 0);
+                PresentGpuPicture(*display, pace ? FrameDue(frame) : 0, frame);
+            } else if (gs::TheGs().weave && gs::TheGs().FieldMode()) {
+                // No window, woven all the same (--deinterlace weave): what a
+                // capture (F12, PS2HOST_CAPTURE_FRAME) shows is both fields.
+                gs::Gs& gs = gs::TheGs();
+                u32 fbp = 0, fbw = 0, psm = 0, w = 0, h = 0;
+                std::uint64_t image = 0;
+                int layout = 0;
+                if (gs.Displayed(&fbp, &fbw, &psm))
+                    g_bridge->renderer->WeaveField(fbp, fbw, psm, gs.DisplayedDby(), gs.ShownLines(),
+                                                   u32(frame + 1) & 1, &image, &layout, &w, &h);
             }
         });
     }
@@ -1693,6 +1725,15 @@ std::string GpuCaptureScreen(const std::string& dir) {
         WriteBmp(dir + "/screen.bmp", pixels, w, std::min(w, 640u * k), std::min(h, 448u * k));
     if (s.renderer->ReadTarget(fbp, fbw, psm, &pixels, &w, &h))
         WriteBmp(dir + "/screen_1x.bmp", pixels, w, std::min(w, 640u), std::min(h, 448u));
+    // Field mode, woven: the picture the window shows (both fields).
+    gs::Gs& gs = gs::TheGs();
+    std::uint64_t image = 0;
+    int layout = 0;
+    if (gs.weave && gs.FieldMode() &&
+        s.renderer->WeaveField(fbp, fbw, psm, gs.DisplayedDby(), gs.ShownLines(), 1 - ShownField(), &image, &layout,
+                               &w, &h) &&
+        s.renderer->ReadWoven(&pixels, &w, &h))
+        WriteBmp(dir + "/screen_woven.bmp", pixels, w, std::min(w, 640u * k), h);
     std::snprintf(text, sizeof text, "shown: FBP %X FBW %u PSM %02X; internal resolution %ux", unsigned(fbp),
                   unsigned(fbw), unsigned(psm), unsigned(k));
     return text;

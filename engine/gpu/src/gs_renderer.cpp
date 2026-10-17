@@ -324,6 +324,9 @@ public:
         *height = t.ph();
         return true;
     }
+    bool WeaveField(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint32_t first_line,
+                    std::uint32_t lines, std::uint32_t parity, std::uint64_t* image, int* layout,
+                    std::uint32_t* width, std::uint32_t* height) override;
     bool ReadDepth(std::uint32_t zbp, std::uint32_t width, std::uint32_t height, std::vector<std::uint32_t>* z) override;
     std::uint32_t Scale() const override { return scale_; }
     void SetScale(std::uint32_t scale) override;
@@ -343,6 +346,12 @@ public:
     void ClutRows(const std::uint32_t* clut, std::uint32_t rows) override;
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                     std::uint32_t* width, std::uint32_t* height) override;
+    bool ReadWoven(std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) override {
+        Flush();
+        return woven_.image && ReadImage(woven_, pixels, width, height);
+    }
+    /* An image's every pixel, back to the CPU. */
+    bool ReadImage(Image& t, std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height);
     bool ReadTargetFull(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                         std::uint32_t* width, std::uint32_t* height) override;
     bool ReadTexture(std::uint64_t key, std::vector<std::uint32_t>* pixels, std::uint32_t* width,
@@ -472,6 +481,7 @@ private:
     std::uint32_t last_pipeline_key_ = ~0u;
     VkPipeline last_pipeline_ = VK_NULL_HANDLE;
     std::map<Key, Image> targets_;
+    Image woven_;                       /* WeaveField's picture: both fields */
     std::map<Key, Image> depths_;   /* by (ZBP or a target's own, width, height) */
     std::map<std::uint64_t, Texture> textures_;
     /* A texture pack's replacements, by id (UploadReplacement); those not
@@ -1941,6 +1951,53 @@ void VulkanGsRenderer::ReleaseTexture(std::uint64_t key) {
     });
 }
 
+bool VulkanGsRenderer::WeaveField(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint32_t first_line,
+                                  std::uint32_t lines, std::uint32_t parity, std::uint64_t* image, int* layout,
+                                  std::uint32_t* width, std::uint32_t* height) {
+    auto found = targets_.find(Key{fbp, fbw, psm});
+    if (found == targets_.end() || !found->second.image || found->second.layout == VK_IMAGE_LAYOUT_UNDEFINED)
+        return false;
+    Image& t = found->second;
+    if (first_line >= t.height) return false;
+    lines = std::min(lines, t.height - first_line);
+    if (!lines) return false;
+    const bool fresh = !woven_.image || woven_.width != t.width || woven_.height != 2 * lines || woven_.scale != t.scale;
+    if (fresh) {
+        DestroyImage(woven_);
+        if (!MakeImage(woven_, t.width, 2 * lines, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                       VK_FORMAT_R8G8B8A8_UNORM, t.scale))
+            return false;
+    }
+    const std::uint32_t k = t.scale;
+    std::vector<VkImageCopy> rows;
+    rows.reserve(fresh ? 2 * lines : lines);
+    for (std::uint32_t y = 0; y < lines; ++y)
+        for (std::uint32_t side = 0; side < (fresh ? 2u : 1u); ++side) {
+            VkImageCopy r{};
+            r.srcSubresource = r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            r.srcOffset = {0, std::int32_t((first_line + y) * k), 0};
+            r.dstOffset = {0, std::int32_t((2 * y + ((parity + side) & 1)) * k), 0};
+            r.extent = {t.pw(), k, 1};
+            rows.push_back(r);
+        }
+    g_.Record([&](VkCommandBuffer cmd) {
+        Transition(cmd, t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT);
+        Transition(cmd, woven_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT);
+        vkCmdCopyImage(cmd, t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, woven_.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, std::uint32_t(rows.size()), rows.data());
+        Transition(cmd, woven_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_PIPELINE_STAGE_TRANSFER_BIT);
+    });
+    Kick();                             // the copy, on the queue before the picture's
+    *image = reinterpret_cast<std::uint64_t>(woven_.image);
+    *layout = int(woven_.layout);
+    *width = woven_.pw();
+    *height = woven_.ph();
+    return true;
+}
+
 Image* VulkanGsRenderer::TargetFor(const GsDrawState& state) {
     Image& t = targets_[Key{state.fbp, state.fbw, state.psm}];
     if (t.image) return &t;
@@ -2628,7 +2685,11 @@ bool VulkanGsRenderer::ReadTargetFull(std::uint32_t fbp, std::uint32_t fbw, std:
     Flush();
     auto found = targets_.find(Key{fbp, fbw, psm});
     if (found == targets_.end()) return false;
-    Image& t = found->second;
+    return ReadImage(found->second, pixels, width, height);
+}
+
+bool VulkanGsRenderer::ReadImage(Image& t, std::vector<std::uint32_t>* pixels, std::uint32_t* width,
+                                 std::uint32_t* height) {
     const VkDeviceSize bytes = VkDeviceSize(t.pw()) * t.ph() * 4;
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;

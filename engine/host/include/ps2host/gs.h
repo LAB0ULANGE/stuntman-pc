@@ -148,6 +148,8 @@ public:
     u32 weave_parity = 0;
     /* How many lines of the frame buffer the display shows. */
     u32 ShownLines() const;
+    /* Interlaced, field mode (SMODE2 INT and FFMD): a field a frame. */
+    bool FieldMode() const;
     bool WriteBmp(const std::string& path) const;
 
     /* Every primitive as it is drawn, for a second renderer (the GPU's, which
@@ -192,6 +194,8 @@ public:
     u64 clut_loads() const { return clut_loads_; }
     /* Which frame buffer is displayed: FBP (as FRAME has it), FBW, PSM. */
     bool Displayed(u32* fbp, u32* fbw, u32* psm) const;
+    /* The displayed buffer's first line (DISPFB's DBY). */
+    u32 DisplayedDby() const;
     /* A pixel of a frame buffer as RGBA, whatever its format (alpha 0x80 for
        24-bit formats). */
     u32 FramePixel(u32 fbp, u32 fbw, u32 psm, u32 x, u32 y) const;

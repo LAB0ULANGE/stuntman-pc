@@ -286,10 +286,26 @@ public:
         (void)fbp, (void)fbw, (void)psm, (void)image, (void)layout, (void)width, (void)height;
         return false;
     }
+    /* A field (field mode: `lines` lines of the target from `first_line`)
+       woven as a television shows it: onto the lines of `parity` of a
+       picture twice its height, the field before on the others (the first
+       on both). That picture, as DisplayTarget gives one. */
+    virtual bool WeaveField(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint32_t first_line,
+                            std::uint32_t lines, std::uint32_t parity, std::uint64_t* image, int* layout,
+                            std::uint32_t* width, std::uint32_t* height) {
+        (void)fbp, (void)fbw, (void)psm, (void)first_line, (void)lines, (void)parity;
+        (void)image, (void)layout, (void)width, (void)height;
+        return false;
+    }
     /* A target's pixels, RGBA in memory, rows top-down; false if there is none. */
     virtual bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm,
                             std::vector<std::uint32_t>* pixels, std::uint32_t* width,
                             std::uint32_t* height) = 0;
+    /* WeaveField's picture as it stands, RGBA, every pixel (a capture). */
+    virtual bool ReadWoven(std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) {
+        (void)pixels, (void)width, (void)height;
+        return false;
+    }
     /* The same at the internal resolution, every pixel (a capture). */
     virtual bool ReadTargetFull(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm,
                                 std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) {
