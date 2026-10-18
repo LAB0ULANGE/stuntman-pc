@@ -2216,11 +2216,13 @@ void SettingsReportSaysWhatDiffers() {
     std::filesystem::create_directories(dir);
     {
         std::ofstream out(dir / "pc_settings.ini");
-        out << "same=on\nchanged=off\nunasked=3\n";
+        out << "same=on\nchanged=off\nunasked=3\ncomma=2,\nstop=off.\n";
     }
     ps2host::LoadSettings((dir / "pc_settings.ini").string());
     ps2host::Setting("same", "on");
     ps2host::Setting("changed", "on");
+    Check(ps2host::Setting("comma", "1") == "2" && ps2host::Setting("stop", "on") == "off",
+          "a setting's value: punctuation after it left out (2, -> 2, off. -> off)");
     const std::string report = ps2host::SettingsReport();
     ps2host::LoadSettings("");
     std::filesystem::remove_all(dir);

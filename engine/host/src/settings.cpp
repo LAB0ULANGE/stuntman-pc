@@ -58,7 +58,19 @@ void LoadSettings(const std::string& path) {
         const auto equals = line.find('=');
         if (line.empty() || line[0] == '#' || equals == std::string::npos) continue;
         const std::string key = Trim(line.substr(0, equals));
-        if (!key.empty()) g_values[key] = Trim(line.substr(equals + 1));
+        if (key.empty()) continue;
+        // Punctuation after a value (`pal_timing=off.`, `render_queue_frames=2,`
+        // copied from a sentence) left out, and said: kept, "off." is not
+        // "off", and the setting silently something else.
+        std::string value = Trim(line.substr(equals + 1));
+        const auto end = value.find_last_not_of(",;.");
+        if (end + 1 != value.size()) {
+            const std::string cleaned = end == std::string::npos ? "" : Trim(value.substr(0, end + 1));
+            std::fprintf(stderr, "[settings] %s=%s taken as %s=%s (the punctuation after it left out)\n",
+                         key.c_str(), value.c_str(), key.c_str(), cleaned.c_str());
+            value = cleaned;
+        }
+        g_values[key] = value;
     }
 }
 
