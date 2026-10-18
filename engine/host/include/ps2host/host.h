@@ -111,6 +111,8 @@ struct Options {
     bool check_guesses = false;    /* --check-guesses: GIF_STAT guesses checked (virtual time) */
     bool vif1_sync = false;        /* --vif1-sync: VIF1 on the EE's thread in real time too */
     bool vif1_worker_virtual = false;  /* --vif1-worker-virtual: VIF1's worker in virtual time too (a check) */
+    /* --vif1-frames-behind N: else the "vif1_frames_behind" setting's, 1 (SetVif1FramesBehind). */
+    std::string vif1_frames_behind;
     /* --vif1-stc-no-wait on|off: else the "vif1_stc_no_wait" setting's, on (SetVif1StcNoWait). */
     std::string vif1_stc_no_wait;
     std::string vu_record;         /* --vu-record: the microprograms run, for vurecomp.py */

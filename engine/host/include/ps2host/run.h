@@ -316,6 +316,9 @@ void SetVif1Worker(bool on);
    EE goes on without waiting for VIF1's worker (the "vif1_stc_no_wait"
    setting, on by default; --vif1-stc-no-wait). */
 void SetVif1StcNoWait(bool on);
+/* VIF1's worker at most this many frames behind the EE (1; the
+   "vif1_frames_behind" setting, --vif1-frames-behind). */
+void SetVif1FramesBehind(int frames);
 bool Vif1StcNoWait();
 /* ...the writes that went on so with the worker busy (would have waited). */
 void CountStcUnwaited();

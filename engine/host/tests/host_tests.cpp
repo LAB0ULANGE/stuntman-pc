@@ -2152,6 +2152,33 @@ void FbrstStcAloneGoesOnWithoutWaiting() {
           "with RST, or the setting off, it waits");
 }
 
+// vif1_frames_behind: the EE at most that many frames ahead of VIF1's
+// worker - with 1, a second frame waits for the first to be done; with 2 it
+// goes on.
+void Vif1WorkerStaysClose() {
+    ps2host::StartVif1Worker();
+    const auto second_waited = [](int behind) {
+        ps2host::SetVif1FramesBehind(behind);
+        std::atomic<bool> release{false}, ran{false};
+        ps2host::Vif1RunFrame([&] {
+            while (!release.load()) std::this_thread::yield();
+            ran = true;
+        });
+        std::thread releaser([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            release = true;
+        });
+        ps2host::Vif1RunFrame([] {});
+        const bool waited = ran.load();
+        releaser.join();
+        ps2host::JoinVif1();
+        return waited;
+    };
+    const bool one = second_waited(1), two = second_waited(2);
+    ps2host::SetVif1FramesBehind(2);
+    Check(one && !two, "VIF1's worker at most vif1_frames_behind frames behind the EE");
+}
+
 void GsCsrFieldHoldsThroughAField() {
     ps2host::InstallDevices();
     ps2host::Memory& m = ps2host::GuestMemory();
@@ -2575,6 +2602,7 @@ int main() {
     GpuBridgeKeepsMemoryAsTheGs();                  // near the end: it puts the GPU in the GS's stead
     GsCsrFieldHoldsThroughAField();                 // it installs the devices
     FbrstStcAloneGoesOnWithoutWaiting();            // last: it starts VIF1's worker
+    Vif1WorkerStaysClose();                         // (VIF1's worker started)
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -591,6 +591,8 @@ int Run(const Options& options) {
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
     SetPalTiming((!options.pal_timing.empty() ? options.pal_timing : Setting("pal_timing", "on")) == "on");
+    SetVif1FramesBehind(std::stoi(!options.vif1_frames_behind.empty() ? options.vif1_frames_behind
+                                                                      : Setting("vif1_frames_behind", "1")));
     SetVif1StcNoWait((!options.vif1_stc_no_wait.empty() ? options.vif1_stc_no_wait
                                                           : Setting("vif1_stc_no_wait", "on")) == "on");
     // A check: the worker in virtual time too, the run otherwise the same.
@@ -764,6 +766,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--sample-vif1") options.sample = options.sample_vif1 = true;
         else if (arg == "--vif1-sync") options.vif1_sync = true;
         else if (arg == "--vif1-worker-virtual") options.vif1_worker_virtual = true;
+        else if (arg == "--vif1-frames-behind" && i + 1 < argc) options.vif1_frames_behind = argv[++i];
         else if (arg == "--vif1-stc-no-wait" && i + 1 < argc) options.vif1_stc_no_wait = argv[++i];
         else if (arg == "--check-guesses") options.check_guesses = true;
         else if (arg == "--vu-snapshot" && i + 3 < argc) {

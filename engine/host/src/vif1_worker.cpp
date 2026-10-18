@@ -24,6 +24,7 @@
  * runs stay the same run.
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -147,6 +148,9 @@ void StartVif1Worker() {
 
 bool Vif1Async() { return g_worker != nullptr; }
 
+std::atomic<int> g_frames_behind{2};
+void SetVif1FramesBehind(int frames) { g_frames_behind = std::max(1, frames); }
+
 namespace {
 bool g_stc_no_wait = false;
 }  // namespace
@@ -192,10 +196,11 @@ void Vif1RunFrame(std::function<void()> command) {
         return;
     }
     Worker& w = *g_worker;
-    // The worker at most kFramesBehind frames behind the EE: what is shown
-    // lags what the game has done by no more (input to picture), and the EE
-    // waits for the worker, not the other way round.
-    constexpr int kFramesBehind = 2;
+    // The worker at most g_frames_behind frames behind the EE (2, or the
+    // "vif1_frames_behind" setting): what is shown lags what the game has
+    // done by no more (input to picture), and the EE waits for the worker,
+    // not the other way round.
+    const int kFramesBehind = g_frames_behind.load(std::memory_order_relaxed);
     if (w.frames.load() >= kFramesBehind) {
         Timed timed(Section::GsWait);
         Waited waited{g_frame_wait_us};
