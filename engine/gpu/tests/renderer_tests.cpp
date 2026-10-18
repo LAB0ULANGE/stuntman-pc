@@ -442,6 +442,28 @@ void PacedPicturesChosen() {
           "paced: a waiting one whose copy is done, not the older one whose is not");
 }
 
+// The renderer on a thread of its own (CreateThreadedRenderer): a target
+// drawn into, never loaded, and its depth buffer (ZBP's, or the target's own
+// when it tests nothing) answer write-backs as made, without waiting; others
+// not; and what it drew reads back as drawn.
+void ThreadedRendererAnswers(ps2gpu::Gpu& gpu) {
+    std::string error;
+    auto threaded = ps2gpu::CreateThreadedRenderer(ps2gpu::CreateGsRenderer(gpu, &error), false);
+    ps2gpu::GsDrawState plain = Target(0x1C0);
+    Rect(*threaded, plain, 0, 0, 8, 8, 0x80102030u);
+    ps2gpu::GsDrawState tested = Target(0x1D0);
+    tested.depth = true;
+    tested.zbp = 0x1D8;
+    Rect(*threaded, tested, 0, 0, 8, 8, 0x80405060u);
+    Check(threaded->TargetToMemory(0x1C0, 1, 0, 64, 64, 0), "threaded: a target drawn into goes to memory");
+    Check(!threaded->TargetToMemory(0x1C8, 1, 0, 64, 64, 0), "threaded: one never drawn into does not");
+    Check(threaded->DepthToMemory(0x1D8, 64, 64, 1, 0, 64, 64, 0), "threaded: the ZBP's depth buffer drawn with");
+    Check(threaded->DepthToMemory(0x10000u + 0x1C0, 64, 64, 1, 0, 64, 64, 0),
+          "threaded: a target's own depth buffer, drawn without a depth test");
+    Check(!threaded->DepthToMemory(0x1E8, 64, 64, 1, 0, 64, 64, 0), "threaded: no other depth buffer");
+    Check(Pixel(*threaded, 0x1C0, 4, 4) == Rgba(0x30, 0x20, 0x10, 0x80), "threaded: what it drew reads back");
+}
+
 int main() {
     PacedPicturesChosen();
     std::string error;
@@ -470,6 +492,7 @@ int main() {
     FreshTargetToMemory(*renderer);
     TargetFromMemory(*renderer);
     PartlyMaskedChannels(*renderer);
+    ThreadedRendererAnswers(*gpu);
     if (g_failures) std::printf("gpu renderer tests: %d failed\n", g_failures);
     else std::printf("gpu renderer tests: all passed (%s)\n", gpu->Describe().c_str());
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;
