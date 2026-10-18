@@ -1321,11 +1321,17 @@ void DumpPass(Bridge& s, const std::tuple<u32, u32, u32>& target) {
     const auto [fbp, fbw, psm] = target;
     std::vector<u32> pixels;
     u32 w = 0, h = 0;
-    if (!s.renderer->ReadTarget(fbp, fbw, psm, &pixels, &w, &h)) return;
+    // PS2HOST_CAPTURE_PASSES_FULL=1: at the internal resolution, not 1x
+    // (what a larger resolution changes, pass by pass).
+    static const bool full = std::getenv("PS2HOST_CAPTURE_PASSES_FULL") != nullptr;
+    const u32 k = full ? s.renderer->Scale() : 1;
+    if (!(full ? s.renderer->ReadTargetFull(fbp, fbw, psm, &pixels, &w, &h)
+               : s.renderer->ReadTarget(fbp, fbw, psm, &pixels, &w, &h)))
+        return;
     char name[96];
     std::snprintf(name, sizeof name, "/pass_%03u_%X_%u_%02X.bmp", unsigned(s.pass), unsigned(fbp), unsigned(fbw),
                   unsigned(psm));
-    WriteBmp(s.dump_passes + name, pixels, w, std::min(w, 640u), std::min(h, 512u));
+    WriteBmp(s.dump_passes + name, pixels, w, std::min(w, 640u * k), std::min(h, 512u * k));
 }
 
 void OnDraw(const gs::Gs::DrawCall& call) {
