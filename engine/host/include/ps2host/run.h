@@ -546,6 +546,10 @@ void SetAudioSteer(bool on);
 void SetPalTiming(bool on);
 void VideoModeAsked(u32 mode);
 u32 VblankPeriodUs();
+/* The game's frame rate (50 PAL, 60 NTSC) to the window: fullscreen takes a
+   refresh it divides evenly, not above the desktop's (the "fullscreen_refresh"
+   setting: match, the default, or desktop). */
+void SetWindowGameRate(int hz);
 constexpr double kSteerTarget = 4.0;
 /* The rate to play at for `level` frames queued, aiming at `target`, of `capacity`. */
 double SteerRatio(double level, double target, double capacity);

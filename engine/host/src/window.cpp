@@ -174,6 +174,7 @@ bool OpenWindow(const wchar_t* title, int width, int height) {
             else timeline::Presented(due_ns, shown_ns);
         });
         if (SettingOn("vsync")) g_display->SetVsync(true);
+        if (Setting("fullscreen_refresh", "match") == "desktop") g_display->SetGameRate(0);
         // present_no_wait (on by default): a picture whose copy would wait for the GPU
         // skipped, not waited for on the GS thread.
         g_display->SetPresentWait(Setting("present_no_wait", "on") != "on");
@@ -326,6 +327,17 @@ bool PictureRate::Tick(bool fresh, u64 now_ns, std::string* line) {
 namespace {
 std::atomic<u64> g_fresh_pictures{0};
 }  // namespace
+
+void SetWindowGameRate(int hz) {
+#ifdef PS2HOST_VULKAN
+    // fullscreen_refresh=desktop: the desktop's refresh, not one the game's rate divides.
+    static int last = 60;
+    last = hz;
+    if (g_display) g_display->SetGameRate(Setting("fullscreen_refresh", "match") == "desktop" ? 0 : last);
+#else
+    (void)hz;
+#endif
+}
 
 void CountPresentedPicture(bool fresh) {
     if (fresh) g_fresh_pictures.fetch_add(1, std::memory_order_relaxed);

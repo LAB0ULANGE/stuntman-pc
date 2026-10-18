@@ -79,6 +79,12 @@ public:
 
     /* Fullscreen (borderless, the desktop's resolution) or a window. */
     virtual void SetFullscreen(bool on) { (void)on; }
+    /* The rate the game's frames come at (60, or 50 for PAL): fullscreen
+       takes a refresh it divides evenly - PAL's 25 pictures a second on a
+       60 Hz screen are each shown two refreshes, then three (a judder), on
+       a 50 Hz one two always. 0: the desktop's refresh, whatever it is. Any
+       thread; the window's own takes it up (Pump). */
+    virtual void SetGameRate(int hz) { (void)hz; }
     virtual bool Fullscreen() const { return false; }
     /* The picture's shape on the screen, width over height: 4:3 as a
        television showed it (the default), 16:9, or 0 - the window's own
@@ -164,6 +170,11 @@ std::unique_ptr<Display> CreateVulkanDisplay(const char* title, int width, int h
    lost (*lost). With `copied` (whether each one's last copy is done), only
    one whose copy is: -1 when none is. */
 int ChoosePaced(int count, int shown, const std::vector<int>& waiting, const bool* copied, bool* lost);
+
+/* Whether a screen refreshing `hz` times a second shows a game's frames at
+   `base` a second evenly (a whole number of refreshes each): 60 Hz and 120
+   for 60, 50 and 100 for PAL's 50. */
+bool DividesEvenly(float hz, int base);
 
 }  // namespace ps2gpu
 

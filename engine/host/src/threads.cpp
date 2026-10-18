@@ -1185,6 +1185,7 @@ void VideoModeAsked(u32 mode) {
     // SetGsCrt's mode: 2 NTSC, 3 PAL (the vertical blanks of real time follow; a
     // virtual-time run keeps its own, the same in every run).
     const u32 us = g_pal_timing.load() && mode == 3 ? 20000 : 16683;
+    SetWindowGameRate(us == 20000 ? 50 : 60);
     if (g_vblank_us.exchange(us) != us)
         std::fprintf(stderr, "[host] vertical blanks every %u us (%s)\n", unsigned(us), us == 20000 ? "PAL" : "NTSC");
 }

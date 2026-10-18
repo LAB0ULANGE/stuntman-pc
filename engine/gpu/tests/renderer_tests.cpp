@@ -520,8 +520,20 @@ void ThreadedRendererStaysClose(ps2gpu::Gpu& gpu) {
     Check(most <= 1, "threaded: at most one frame queued, the caller waiting");
 }
 
+// Fullscreen's refresh for a game's rate (SetGameRate): a whole number of
+// refreshes a frame.
+void RefreshesDivideEvenly() {
+    Check(ps2gpu::DividesEvenly(50.0f, 50) && ps2gpu::DividesEvenly(100.0f, 50) && !ps2gpu::DividesEvenly(60.0f, 50) &&
+              !ps2gpu::DividesEvenly(144.0f, 50),
+          "refresh: 50 and 100 Hz for PAL's 50, not 60 or 144");
+    Check(ps2gpu::DividesEvenly(59.94f, 60) && ps2gpu::DividesEvenly(120.0f, 60) && !ps2gpu::DividesEvenly(144.0f, 60) &&
+              !ps2gpu::DividesEvenly(50.0f, 60) && !ps2gpu::DividesEvenly(60.0f, 0),
+          "refresh: 60 and 120 Hz for 60, not 144 or 50; nothing for no rate");
+}
+
 int main() {
     PacedPicturesChosen();
+    RefreshesDivideEvenly();
     std::string error;
     auto gpu = ps2gpu::CreateGpu(&error);
     if (!gpu) {

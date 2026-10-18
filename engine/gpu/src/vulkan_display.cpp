@@ -50,6 +50,9 @@ public:
     bool Pump() override;
     void SetFullscreen(bool on) override;
     bool Fullscreen() const override;
+    void SetGameRate(int hz) override {
+        if (game_rate_.exchange(hz) != hz) game_rate_changed_ = true;
+    }
     void SetVsync(bool on) override;
     void SetPresentWait(bool wait) override { present_wait_ = wait; }
     bool TakeCapture() override {
@@ -172,6 +175,8 @@ private:
     std::atomic<bool> cursor_wanted_{false};
     int cursor_showing_ = -1;               // what the window shows: -1 not yet set, 0 the system's, 1 the game's
     bool fullscreen_cursor_stale_ = false;
+    std::atomic<int> game_rate_{60};                // SetGameRate
+    std::atomic<bool> game_rate_changed_{false};
     void UpdateCursor();
     VkInstance instance_ = VK_NULL_HANDLE;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -1033,14 +1038,12 @@ void VulkanDisplay::SetVsync(bool on) {
    is such a rate already or the display offers none. On a 144 Hz display a
    frame took two refreshes, then three (14 and 21 ms): a judder no pacing
    undoes. */
-const SDL_DisplayMode* EvenMode(SDL_Window* window) {
+const SDL_DisplayMode* EvenMode(SDL_Window* window, int base) {
     const SDL_DisplayID id = SDL_GetDisplayForWindow(window);
     const SDL_DisplayMode* desktop = id ? SDL_GetDesktopDisplayMode(id) : nullptr;
-    if (!desktop) return nullptr;
-    auto even = [](float hz) {
-        const int n = int(hz / 60.0f + 0.5f);
-        return n >= 1 && std::fabs(hz - 60.0f * float(n)) < 0.6f * float(n);
-    };
+    if (!desktop || base <= 0) return nullptr;
+    // (base: the game's rate, 60 - or 50, PAL's: 50 Hz, 100 Hz)
+    auto even = [base](float hz) { return DividesEvenly(hz, base); };
     if (even(desktop->refresh_rate)) return nullptr;
     int count = 0;
     SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(id, &count);
@@ -1060,7 +1063,7 @@ const SDL_DisplayMode* EvenMode(SDL_Window* window) {
 void VulkanDisplay::SetFullscreen(bool on) {
     if (!window_) return;
     if (on) {
-        const SDL_DisplayMode* mode = EvenMode(window_);
+        const SDL_DisplayMode* mode = EvenMode(window_, game_rate_.load());
         SDL_SetWindowFullscreenMode(window_, mode);
         if (mode)
             std::fprintf(stderr, "[display] fullscreen at %dx%d, %.2f Hz\n", mode->w, mode->h,
@@ -1078,6 +1081,8 @@ bool VulkanDisplay::Fullscreen() const {
 }
 
 bool VulkanDisplay::Pump() {
+    // The game's rate changed (SetGameRate): fullscreen's mode taken again.
+    if (game_rate_changed_.exchange(false) && window_ && Fullscreen()) SetFullscreen(true);
     {
         std::lock_guard<std::mutex> hold(title_lock_);
         if (title_changed_ && window_) SDL_SetWindowTitle(window_, title_.c_str());
@@ -1329,6 +1334,13 @@ int ChoosePaced(int count, int shown, const std::vector<int>& waiting, const boo
             return i;
         }
     return -1;
+}
+
+bool DividesEvenly(float hz, int base) {
+    if (base <= 0) return false;
+    const float b = float(base);
+    const int n = int(hz / b + 0.5f);
+    return n >= 1 && std::fabs(hz - b * float(n)) < 0.6f * float(n);
 }
 
 }  // namespace ps2gpu
