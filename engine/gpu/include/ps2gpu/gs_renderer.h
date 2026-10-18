@@ -23,6 +23,7 @@
 #define PS2GPU_GS_RENDERER_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -266,6 +267,18 @@ public:
     /* A renderer made on a thread of its own (CreateThreadedRenderer): the
        one it runs, its queue run first; null for any other. */
     virtual std::unique_ptr<GsRenderer> TakeInner() { return nullptr; }
+    /* `call` with the renderer once everything asked before is done: now
+       (true), or on its own thread, in turn, the caller going on (false: a
+       renderer on a thread of its own, SetThenQueued). */
+    virtual bool Then(std::function<void(GsRenderer&)> call) {
+        call(*this);
+        return true;
+    }
+    /* ...a renderer on a thread of its own: Then queued (true) or waited for. */
+    virtual void SetThenQueued(bool queued) { (void)queued; }
+    /* ...and its queue: each draw's state, target and depth buffer taken as
+       they come (false), or only when they change (true). */
+    virtual void SetQueueFast(bool fast) { (void)fast; }
     /* ...in "check": TargetToMemory's and DepthToMemory's answers, and those
        that differed from the ones worked out; false if not checking. */
     virtual bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ) {

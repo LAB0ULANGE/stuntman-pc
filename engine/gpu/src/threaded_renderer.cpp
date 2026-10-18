@@ -20,6 +20,7 @@
 #include "gpu_internal.h"
 
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -50,11 +51,14 @@ public:
         if (scale != scale_) {
             targets_.clear();
             depths_.clear();
+            last_target_ = nullptr;
+            last_depth_valid_ = false;
         }
         scale_ = scale;
         Queue([r = inner_.get(), scale](void*) { r->SetScale(scale); });
     }
     std::uint32_t Scale() const override {
+        if (fast_) return scale_;           // (written by SetScale on this same thread)
         std::lock_guard<std::mutex> hold(lock_);
         return scale_;
     }
@@ -96,15 +100,43 @@ public:
     void DrawTriangles(const GsDrawState& state, const GsVertex* vertices, std::size_t count) override {
         std::lock_guard<std::mutex> hold(lock_);
         if (count >= 3) {
-            // Its target, and its depth buffer as the renderer's Flush picks it.
-            const auto& size = Made(state.fbp, state.fbw, state.psm, state.width, state.height);
-            depths_.insert(state.depth ? Key{state.zbp, size.first, std::min(size.second, kDepthRows)}
-                                       : Key{0x10000u + state.fbp, size.first, size.second});
+            // Its target, and its depth buffer as the renderer's Flush picks it
+            // (fast: not looked for again while they are the last draw's).
+            const Key target{state.fbp, state.fbw, state.psm};
+            if (!fast_ || !last_target_ || target != last_target_key_) {
+                last_target_ = &Made(state.fbp, state.fbw, state.psm, state.width, state.height);
+                last_target_key_ = target;
+                last_depth_valid_ = false;
+            }
+            const auto& size = *last_target_;
+            const Key depth = state.depth ? Key{state.zbp, size.first, std::min(size.second, kDepthRows)}
+                                          : Key{0x10000u + state.fbp, size.first, size.second};
+            if (!fast_ || !last_depth_valid_ || depth != last_depth_) {
+                depths_.insert(depth);
+                last_depth_ = depth;
+                last_depth_valid_ = true;
+            }
         }
-        Queue([r = inner_.get(), state, count](void* p) {
+        // Fast: the state sent only when it changes; the thread keeps the last.
+        if (fast_ && sent_state_ && std::memcmp(&state, &sent_, sizeof state) == 0) {
+            Queue([r = inner_.get(), s = &thread_state_, count](void* p) {
+                      r->DrawTriangles(*s, static_cast<const GsVertex*>(p), count);
+                  },
+                  vertices, count * sizeof(GsVertex), [&] { inner_->DrawTriangles(state, vertices, count); });
+            return;
+        }
+        if (fast_) {
+            std::memcpy(&sent_, &state, sizeof state);
+            sent_state_ = true;
+        }
+        Queue([r = inner_.get(), s = &thread_state_, state, count](void* p) {
+                  *s = state;
                   r->DrawTriangles(state, static_cast<const GsVertex*>(p), count);
               },
-              vertices, count * sizeof(GsVertex), [&] { inner_->DrawTriangles(state, vertices, count); });
+              vertices, count * sizeof(GsVertex), [&] {
+                  thread_state_ = state;
+                  inner_->DrawTriangles(state, vertices, count);
+              });
     }
     void Flush() override {
         std::lock_guard<std::mutex> hold(lock_);
@@ -226,6 +258,32 @@ public:
         return known;
     }
     bool BlockCompression() const override { return inner_->BlockCompression(); }     // (the device's)
+    bool Then(std::function<void(GsRenderer&)> call) override {
+        std::lock_guard<std::mutex> hold(lock_);
+        if (!then_queued_) {
+            queue_.Drain();
+            call(*inner_);
+            return true;
+        }
+        // (a function's state is not the queue's to keep: held apart, freed once made)
+        auto* held = new std::function<void(GsRenderer&)>(std::move(call));
+        Queue([r = inner_.get(), held](void*) {
+            (*held)(*r);
+            delete held;
+        });
+        return false;
+    }
+    void SetQueueFast(bool fast) override {
+        std::lock_guard<std::mutex> hold(lock_);
+        fast_ = fast;
+        last_target_ = nullptr;
+        last_depth_valid_ = false;
+        sent_state_ = false;
+    }
+    void SetThenQueued(bool queued) override {
+        std::lock_guard<std::mutex> hold(lock_);
+        then_queued_ = queued;
+    }
 
     // ---- waited for, then made at once
     bool UploadReplacement(std::uint64_t id, std::uint32_t format, std::uint32_t width, std::uint32_t height,
@@ -358,6 +416,20 @@ private:
     std::map<Key, std::pair<std::uint32_t, std::uint32_t>> targets_;
     std::set<Key> depths_;
     std::uint64_t answers_ = 0, differ_ = 0, kicks_ = 0;
+    // SetQueueFast (the render_queue setting): Scale without the lock, the
+    // last draw's target and depth buffer not looked for again, and a draw's
+    // state sent only when it changes (the thread keeps the last:
+    // thread_state_) - the bridge draws a primitive at a time, thousands a
+    // picture, most with the state of the one before.
+    bool fast_ = false;
+    bool then_queued_ = false;              // SetThenQueued
+    const std::pair<std::uint32_t, std::uint32_t>* last_target_ = nullptr;
+    Key last_target_key_{};
+    Key last_depth_{};
+    bool last_depth_valid_ = false;
+    GsDrawState sent_{};
+    bool sent_state_ = false;
+    GsDrawState thread_state_{};
 };
 
 }  // namespace

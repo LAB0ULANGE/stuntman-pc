@@ -2031,6 +2031,7 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         _putenv_s("PS2GPU_STREAM_DELAY_US", way == 2 ? "300" : "0");
         ps2host::SetVulkanThread(way != 1);
         // The renderer on a thread of its own, its answers checked the third time.
+        ps2host::SetRenderQueue(way == 1 ? "plain" : "fast");
         ps2host::SetRenderThread(way == 0 ? "on" : way == 1 ? "off" : "check");
         const u32 fbp = way == 0 ? 0x10 : way == 1 ? 0x30 : 0x50;
         const u32 colour = way == 0 ? 0 : way == 1 ? 0x01010101u : 0x02020202u;
@@ -2060,6 +2061,7 @@ void GpuBridgeKeepsMemoryAsTheGs() {
     }
     ps2host::SetDateInPass("off");
     ps2host::SetRenderThread("off");
+    ps2host::SetRenderQueue("plain");
     ps2host::SetVulkanThread(false);
     _putenv_s("PS2GPU_STREAM_DELAY_US", "0");
     ps2host::SetDateArea("batch");

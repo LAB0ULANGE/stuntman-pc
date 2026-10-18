@@ -1745,12 +1745,49 @@ void Rescale(Bridge& b, u32 scale) {
     std::fprintf(stderr, "[gpu] internal resolution: %ux\n", unsigned(scale));
 }
 
+bool g_present_on_render_thread = false;     // SetPresentOnRenderThread
+
 void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
     u32 fbp = 0, fbw = 0, psm = 0;
+    gs::Gs& gs = gs::TheGs();
+    // present_on_render_thread: what the GS model and the bridge know of the
+    // picture taken here, the rest - its image from the renderer, the
+    // present - in turn on the renderer's thread, the GS thread going on (it
+    // waited each frame for all the renderer had: a tenth of its time in
+    // Stuntman's stunt). Field mode woven as below; nothing shown when the
+    // renderer has no image after all (the picture before stays).
+    if (g_bridge && g_present_on_render_thread && gs.Displayed(&fbp, &fbw, &psm)) {
+        auto found = g_bridge->owned.find(std::make_tuple(fbp, fbw, psm, false));
+        if (found != g_bridge->owned.end() && !found->second.stale) {
+            const u32 shown_lines = gs.ShownLines();
+            const bool weave = gs.weave && gs.FieldMode() && shown_lines <= 512;
+            const u32 dby = weave ? gs.DisplayedDby() : 0, parity = u32(frame + 1) & 1;
+            const u32 lines = std::min(shown_lines, 448u);
+            static u64 shown_serial = 0;
+            const bool fresh = found->second.drawn_serial != shown_serial;
+            shown_serial = found->second.drawn_serial;
+            ps2gpu::Display* shown = &display;
+            g_bridge->renderer->Then([=](ps2gpu::GsRenderer& r) {
+                std::uint64_t image = 0;
+                int layout = 0;
+                u32 w = 0, h = 0;
+                const u32 k = r.Scale();
+                const auto present = [&](u32 width, u32 height) {
+                    CountPresentedPicture(fresh);
+                    if (due_ns) shown->PresentImageAt(image, layout, width, height, due_ns);
+                    else shown->PresentImage(image, layout, width, height);
+                };
+                if (weave && r.WeaveField(fbp, fbw, psm, dby, shown_lines, parity, &image, &layout, &w, &h))
+                    present(std::min(w, 640u * k), h);
+                else if (r.DisplayTarget(fbp, fbw, psm, &image, &layout, &w, &h))
+                    present(std::min(w, 640u * k), std::min(h, lines * k));
+            });
+            return;
+        }
+    }
     // Field mode, woven (gs.weave: --deinterlace, the deinterlace setting):
     // this field on the lines of the parity the game drew it for, the one
     // before on the others, the whole picture shown (Gs::Picture's weave).
-    gs::Gs& gs = gs::TheGs();
     if (g_bridge && gs.weave && gs.Displayed(&fbp, &fbw, &psm)) {
         const u32 lines = gs.ShownLines();
         auto found = g_bridge->owned.find(std::make_tuple(fbp, fbw, psm, false));
@@ -1914,6 +1951,18 @@ void SetDateArea(const std::string& mode) {
     if (mode == "full") std::fprintf(stderr, "[gpu] DATE set up over the whole target\n");
 }
 
+bool g_render_queue_fast = false;           // SetRenderQueue
+
+void SetRenderQueue(const std::string& mode) {
+    g_render_queue_fast = mode != "plain";
+    if (g_bridge) g_bridge->renderer->SetQueueFast(g_render_queue_fast);
+}
+
+void SetPresentOnRenderThread(bool on) {
+    g_present_on_render_thread = on;
+    if (g_bridge) g_bridge->renderer->SetThenQueued(on);
+}
+
 std::string SetRenderThread(const std::string& mode) {
     if (!g_bridge) return "off";
     // The renderer itself again (its queue run), then on a thread if asked.
@@ -1921,6 +1970,8 @@ std::string SetRenderThread(const std::string& mode) {
         g_bridge->renderer = std::move(inner);
     if (mode != "on" && mode != "check") return "off";
     g_bridge->renderer = ps2gpu::CreateThreadedRenderer(std::move(g_bridge->renderer), mode == "check");
+    g_bridge->renderer->SetThenQueued(g_present_on_render_thread);
+    g_bridge->renderer->SetQueueFast(g_render_queue_fast);
     if (mode == "check")
         std::fprintf(stderr, "[gpu] the renderer on a thread of its own, its answers checked\n");
     return mode;

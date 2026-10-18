@@ -446,9 +446,10 @@ void PacedPicturesChosen() {
 // drawn into, never loaded, and its depth buffer (ZBP's, or the target's own
 // when it tests nothing) answer write-backs as made, without waiting; others
 // not; and what it drew reads back as drawn.
-void ThreadedRendererAnswers(ps2gpu::Gpu& gpu) {
+void ThreadedRendererAnswers(ps2gpu::Gpu& gpu, bool fast) {
     std::string error;
     auto threaded = ps2gpu::CreateThreadedRenderer(ps2gpu::CreateGsRenderer(gpu, &error), false);
+    threaded->SetQueueFast(fast);
     ps2gpu::GsDrawState plain = Target(0x1C0);
     Rect(*threaded, plain, 0, 0, 8, 8, 0x80102030u);
     ps2gpu::GsDrawState tested = Target(0x1D0);
@@ -462,6 +463,41 @@ void ThreadedRendererAnswers(ps2gpu::Gpu& gpu) {
           "threaded: a target's own depth buffer, drawn without a depth test");
     Check(!threaded->DepthToMemory(0x1E8, 64, 64, 1, 0, 64, 64, 0), "threaded: no other depth buffer");
     Check(Pixel(*threaded, 0x1C0, 4, 4) == Rgba(0x30, 0x20, 0x10, 0x80), "threaded: what it drew reads back");
+}
+
+// Then on a renderer on a thread of its own, queued: the caller goes on
+// (false), the call made after what was asked before - it sees the draw;
+// not queued: made at once (true).
+void ThreadedRendererThen(ps2gpu::Gpu& gpu) {
+    std::string error;
+    auto threaded = ps2gpu::CreateThreadedRenderer(ps2gpu::CreateGsRenderer(gpu, &error), false);
+    threaded->SetThenQueued(true);
+    Rect(*threaded, Target(0x1A0), 0, 0, 8, 8, 0x80506070u);
+    std::uint32_t seen = 0;
+    const bool now = threaded->Then([&](ps2gpu::GsRenderer& r) { seen = Pixel(r, 0x1A0, 4, 4); });
+    Pixel(*threaded, 0x1A0, 0, 0);                      // (waits for the queue)
+    Check(!now && seen == Rgba(0x70, 0x60, 0x50, 0x80), "threaded: Then queued, after the draw before it");
+    threaded->SetThenQueued(false);
+    Rect(*threaded, Target(0x1A0), 0, 0, 8, 8, 0x80102030u);
+    const bool at_once = threaded->Then([&](ps2gpu::GsRenderer& r) { seen = Pixel(r, 0x1A0, 4, 4); });
+    Check(at_once && seen == Rgba(0x30, 0x20, 0x10, 0x80), "threaded: Then not queued, made at once");
+}
+
+// The fast queue sends a draw's state only when it changes: a change in a
+// field far into it (the scissor) still reaches the renderer.
+void ThreadedQueueFastFollowsState(ps2gpu::Gpu& gpu) {
+    std::string error;
+    auto threaded = ps2gpu::CreateThreadedRenderer(ps2gpu::CreateGsRenderer(gpu, &error), false);
+    threaded->SetQueueFast(true);
+    const ps2gpu::GsDrawState whole = Target(0x1B0);
+    ps2gpu::GsDrawState left = whole;
+    left.scissor_x1 = 15;
+    Rect(*threaded, whole, 0, 0, 40, 8, 0x80000001u);
+    Rect(*threaded, left, 0, 0, 40, 8, 0x80000002u);    // only x 0-15
+    Rect(*threaded, whole, 0, 40, 8, 48, 0x80000003u);
+    Check(Pixel(*threaded, 0x1B0, 4, 4) == Rgba(2, 0, 0, 0x80) && Pixel(*threaded, 0x1B0, 30, 4) == Rgba(1, 0, 0, 0x80) &&
+              Pixel(*threaded, 0x1B0, 4, 44) == Rgba(3, 0, 0, 0x80),
+          "threaded, fast queue: each draw with its own state");
 }
 
 int main() {
@@ -492,7 +528,10 @@ int main() {
     FreshTargetToMemory(*renderer);
     TargetFromMemory(*renderer);
     PartlyMaskedChannels(*renderer);
-    ThreadedRendererAnswers(*gpu);
+    ThreadedRendererAnswers(*gpu, false);
+    ThreadedRendererAnswers(*gpu, true);
+    ThreadedRendererThen(*gpu);
+    ThreadedQueueFastFollowsState(*gpu);
     if (g_failures) std::printf("gpu renderer tests: %d failed\n", g_failures);
     else std::printf("gpu renderer tests: all passed (%s)\n", gpu->Describe().c_str());
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;
