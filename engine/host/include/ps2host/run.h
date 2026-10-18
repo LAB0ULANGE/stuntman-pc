@@ -256,11 +256,11 @@ void SetVulkanThread(bool on);
 std::string SetRenderThread(const std::string& mode);
 /* The window's picture taken from the renderer and presented on its thread,
    in turn, the GS thread not waiting for it (the "present_on_render_thread"
-   setting, off by default; --present-on-render-thread; with render_thread). */
+   setting, on by default; --present-on-render-thread; with render_thread). */
 void SetPresentOnRenderThread(bool on);
 /* The renderer's queue (render_thread): "fast" - a draw's state, target and
-   depth buffer only when they change - or "plain" (the "render_queue"
-   setting, plain by default; --render-queue). */
+   depth buffer only when they change, the "render_queue" setting's default
+   - or "plain" (--render-queue). */
 void SetRenderQueue(const std::string& mode);
 /* "check"'s findings: the answers compared, those that differed. */
 bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ);

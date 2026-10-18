@@ -136,9 +136,9 @@ struct Options {
     std::string date_area;
     /* --date-in-pass off|on|check: else the "date_in_pass" setting's, on (SetDateInPass). */
     std::string date_in_pass;
-    /* --render-queue fast|plain: else the "render_queue" setting's, plain (SetRenderQueue). */
+    /* --render-queue fast|plain: else the "render_queue" setting's, fast (SetRenderQueue). */
     std::string render_queue;
-    /* --present-on-render-thread on|off: else the "present_on_render_thread" setting's, off. */
+    /* --present-on-render-thread on|off: else the "present_on_render_thread" setting's, on. */
     std::string present_on_render_thread;
     /* --render-thread off|on|check: else the "render_thread" setting's, on (SetRenderThread). */
     std::string render_thread;

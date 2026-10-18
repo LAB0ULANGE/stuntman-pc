@@ -662,10 +662,10 @@ int Run(const Options& options) {
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
         SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
         SetVulkanThread((!options.vulkan_thread.empty() ? options.vulkan_thread : Setting("vulkan_thread", "on")) == "on");
-        SetRenderQueue(!options.render_queue.empty() ? options.render_queue : Setting("render_queue", "plain"));
+        SetRenderQueue(!options.render_queue.empty() ? options.render_queue : Setting("render_queue", "fast"));
         SetPresentOnRenderThread((!options.present_on_render_thread.empty()
                                       ? options.present_on_render_thread
-                                      : Setting("present_on_render_thread", "off")) == "on");
+                                      : Setting("present_on_render_thread", "on")) == "on");
         SetRenderThread(!options.render_thread.empty() ? options.render_thread : Setting("render_thread", "on"));
         if (options.gs_no_draw) gs::TheGs().on_draw = nullptr;     // (--gs-no-draw: nor the GPU)
     }
