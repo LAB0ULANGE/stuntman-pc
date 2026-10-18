@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <cctype>
@@ -884,6 +885,8 @@ struct Sound {
         bool active = false;
         u32 address = 0, size = 0, half = 0;
         u64 period_us = 0, due_us = 0;
+        u64 halves = 0;             // the input's halves played, the interrupts given for them
+        u32 done = 0;               // the half last finished: the one free to write
     } block[2];
     std::vector<u32> pending;       // channels whose transfer interrupt is due now
 };
@@ -1001,6 +1004,8 @@ Outcome SdBlockTrans(Vm& vm, Context& c) {
     b.address = address;
     b.size = size;
     b.half = 0;
+    b.halves = 0;
+    b.done = 0;
     // A write in a loop (SD_TRANS_MODE_WRITE | SD_BLOCK_LOOP): the core
     // plays the buffer as its sound data input (Spu2::SetInput).
     if ((mode & 3) == 0 && (mode & 0x10)) S().spu.SetInput(channel, vm.At(address, size), size);
@@ -1012,7 +1017,12 @@ Outcome SdBlockTrans(Vm& vm, Context& c) {
 
 Outcome SdBlockTransStatus(Vm&, Context& c) {
     const Sound::Block& b = S().block[c.r[4] & 1];
-    return Ret(c, (b.half << 24) | ((b.address + b.half * (b.size / 2)) & 0xFFFFFF));
+    // Bit 24: the half the last interrupt was for - done with, and free to
+    // write (Stuntman's XAVSTRM clears and refills base + bit * half right
+    // after each interrupt; given the half playing instead, it rewrote that
+    // one under the player, the start of every other half heard 128 ms old).
+    // The address: where the transfer is.
+    return Ret(c, (b.done << 24) | ((b.address + b.half * (b.size / 2)) & 0xFFFFFF));
 }
 
 Outcome SdStopTrans(Vm&, Context& c) {
@@ -1195,9 +1205,40 @@ void SoundInterrupts(Vm& vm) {
     std::vector<u32> due;
     due.swap(s.pending);
     const u64 now = vm.NowUs();
+    // The SPU2 to now first, and its own interrupt: playback (or a
+    // transfer) reached IRQA.
+    {
+        Timed timed(Section::Spu2);
+        s.spu.Advance(now, [&](u32 core) {
+            if (s.spu2.function) vm.Call(s.spu2.function, {1u << core, s.spu2.arg});
+            else if (s.irq_callback) vm.Call(s.irq_callback, {0});
+        });
+    }
     for (u32 ch = 0; ch < 2; ++ch) {
         Sound::Block& b = s.block[ch];
-        if (b.active && b.period_us && now >= b.due_us) {
+        if (!b.active) continue;
+        // A buffer the core plays (its sound data input): an interrupt each
+        // time its playing crosses into the other half, by the SPU2's own
+        // count of what it played: the half the status calls done is the
+        // one the player left, however late the IOP runs (timed apart, a
+        // timer put right after falling behind could part from it).
+        const long long played = s.spu.InputPlayed(ch);
+        if (played >= 0 && b.size >= 8) {
+            const u64 halves = u64(played) / (b.size / 8);      // bytes / 4 a frame / 2 halves
+            if (halves > b.halves) {                            // more than one: once, not a burst
+                static const bool log = std::getenv("PS2HOST_BLOCK_LOG") != nullptr;
+                if (log)
+                    std::fprintf(stderr, "[block] %u: into half %u, %llu frames into it\n", unsigned(ch),
+                                 unsigned(halves & 1), (unsigned long long)(u64(played) % (b.size / 8)));
+                b.halves = halves;
+                b.half = u32(halves & 1);
+                b.done = b.half ^ 1;
+                due.push_back(ch);
+            }
+            continue;
+        }
+        if (b.period_us && now >= b.due_us) {
+            b.done = b.half;
             b.half ^= 1;
             b.due_us += b.period_us;
             if (b.due_us < now) b.due_us = now + b.period_us;   // fell behind: don't burst
@@ -1208,12 +1249,6 @@ void SoundInterrupts(Vm& vm) {
         if (s.transfer[ch].function) vm.Call(s.transfer[ch].function, {ch, s.transfer[ch].arg});
         else if (s.transfer_callback[ch]) vm.Call(s.transfer_callback[ch], {0});
     }
-    // The SPU2's own interrupt: playback (or a transfer) reached IRQA.
-    Timed timed(Section::Spu2);
-    s.spu.Advance(now, [&](u32 core) {
-        if (s.spu2.function) vm.Call(s.spu2.function, {1u << core, s.spu2.arg});
-        else if (s.irq_callback) vm.Call(s.irq_callback, {0});
-    });
 }
 
 // Due CD/DVD interrupts: sceCdCallback's function, once a command it

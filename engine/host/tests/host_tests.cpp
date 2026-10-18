@@ -2424,6 +2424,36 @@ void IopPoolsAndLibraryCalls() {
     Check(s32(none.r[2]) == -100, "CheckThreadStack outside a thread: KE_ILLEGAL_CONTEXT");
     vm.current = saved_current;
     vm.threads.erase(902);
+
+    // sceSdBlockTrans in a loop (the core's sound data input): an interrupt
+    // as the playing crosses into each half, and the status's bit 24 the
+    // half just left - the one XAVSTRM clears and refills at once (given the
+    // half playing, it rewrote the music under the player).
+    {
+        const u32 handler = 0x001E0200u, seen = 0x001E0300u, buffer = 0x001D0000u;
+        const u32 code[] = {0x3C08001Eu, 0x8D090300u, 0x25290001u, 0x03E00008u, 0xAD090300u};
+        // lui t0, 0x1E; lw t1, 0x300(t0); addiu t1, 1; jr ra; sw t1, 0x300(t0): counts its calls
+        for (u32 i = 0; i < 5; ++i) vm.Write(handler + 4 * i, code[i], 4);
+        vm.Write(seen, 0, 4);
+        call("libsd", 26, {0, handler, 0});                         // sceSdSetTransIntrHandler
+        SoundInterrupts(vm);
+        call("libsd", 18, {0, 0x10, buffer, 0x800});                // write, loop: halves of 256 frames
+        const u32 at_start = call("libsd", 20, {0, 0});
+        u32 first = 0, second = 0;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (vm.Read(seen, 4) < 2 && std::chrono::steady_clock::now() < until) {
+            const u32 before = vm.Read(seen, 4);
+            SoundInterrupts(vm);
+            if (before == 0 && vm.Read(seen, 4) == 1) first = call("libsd", 20, {0, 0});
+            if (before == 1 && vm.Read(seen, 4) == 2) second = call("libsd", 20, {0, 0});
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        }
+        call("libsd", 18, {0, 2, 0, 0});                            // stop
+        call("libsd", 26, {0, 0, 0});
+        Check(at_start == buffer, "block transfer status at the start: half 0, playing from the buffer's start");
+        Check(first == (0u << 24 | (buffer + 0x400)), "after the first half: half 0 free to write, playing half 1");
+        Check(second == (1u << 24 | buffer), "after the second: half 1 free to write, playing half 0");
+    }
 }
 
 void IopInstructionsMatchTheR5900() {

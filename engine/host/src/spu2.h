@@ -61,6 +61,13 @@ public:
 
     void SetParam(u32 entry, u32 value);
     u32 GetParam(u32 entry) const;
+    /* How many frames of the sound data input have played since SetInput
+       (-1 when there is none): the block transfer's half-buffer interrupts
+       go by it, not by a clock of their own. */
+    long long InputPlayed(u32 core) const {
+        const Core& c = cores_[core & 1];
+        return c.input ? (long long)(u64(clock_) - c.input_from) : -1;
+    }
     void SetSwitch(u32 entry, u32 value);
     u32 GetSwitch(u32 entry) const;
     void SetAddr(u32 entry, u32 value);

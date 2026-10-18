@@ -632,6 +632,17 @@ void Spu2::Advance(u64 now_us, const std::function<void(u32 core)>& irq) {
                 const s32 in_left = s16(u16(at[0] | at[1] << 8)), in_right = s16(u16(at[0x200] | at[0x201] << 8));
                 core_left += (in_left * Volume(c.bvoll)) >> 15;
                 core_right += (in_right * Volume(c.bvolr)) >> 15;
+                // PS2HOST_INPUT_DUMP=file: each 0x400-byte block of the
+                // input as its last frame plays, to be checked against the
+                // disc's stream (skips, repeats).
+                static std::FILE* dump = [] {
+                    const char* path = std::getenv("PS2HOST_INPUT_DUMP");
+                    return path ? std::fopen(path, "wb") : nullptr;
+                }();
+                if (dump && f % 256 == 255) {
+                    std::fwrite(c.input + 0x400 * (f / 256), 1, 0x400, dump);
+                    std::fflush(dump);
+                }
             }
             // The reverb (SD_CORE_EFFECT_ENABLE, attr bit 2): a step every
             // other sample, on the pair's first input; its output held for
