@@ -249,8 +249,9 @@ std::string SetDateInPass(const std::string& mode);
 void SetVulkanThread(bool on);
 /* The GPU renderer on a thread of its own, beside the GS model and the
    bridge ("on"); "check": the answers it works out for the bridge's
-   write-backs compared with the renderer's (waiting for it each time); "off"
-   (the "render_thread" setting's default; --render-thread): on the GS thread.
+   write-backs compared with the renderer's (waiting for it each time); "off":
+   on the GS thread. "on" is the "render_thread" setting's default
+   (--render-thread).
    Returns the mode taken. */
 std::string SetRenderThread(const std::string& mode);
 /* "check"'s findings: the answers compared, those that differed. */

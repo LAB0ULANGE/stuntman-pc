@@ -662,7 +662,7 @@ int Run(const Options& options) {
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
         SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
         SetVulkanThread((!options.vulkan_thread.empty() ? options.vulkan_thread : Setting("vulkan_thread", "on")) == "on");
-        SetRenderThread(!options.render_thread.empty() ? options.render_thread : Setting("render_thread", "off"));
+        SetRenderThread(!options.render_thread.empty() ? options.render_thread : Setting("render_thread", "on"));
         if (options.gs_no_draw) gs::TheGs().on_draw = nullptr;     // (--gs-no-draw: nor the GPU)
     }
     bool sound = false;
