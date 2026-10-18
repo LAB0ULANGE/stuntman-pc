@@ -21,6 +21,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <thread>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -147,8 +148,14 @@ public:
         ++kicks_asked_;
         Queue([r = inner_.get(), made = &kicks_made_](void*) {
             r->Kick();
-            made->fetch_add(1, std::memory_order_relaxed);
+            made->fetch_add(1, std::memory_order_release);
         });
+        // No more than max_frames_ frames ahead of the renderer
+        // (SetMaxQueuedFrames): the caller waits for it. Unbounded, the
+        // renderer held up by the GPU fell ever further behind - 70 frames
+        // (1.4 s) into the stunt, the pad's presses seen that late.
+        if (max_frames_ > 0)
+            while (QueuedFrames() > max_frames_) std::this_thread::sleep_for(std::chrono::microseconds(100));
         if (check_ && ++kicks_ % 600 == 0)
             std::fprintf(stderr, "[ps2gpu] render thread check: %llu answers compared, %llu differed%c",
                          (unsigned long long)answers_, (unsigned long long)differ_, 10);
@@ -279,6 +286,10 @@ public:
             delete held;
         });
         return false;
+    }
+    void SetMaxQueuedFrames(std::uint32_t frames) override {
+        std::lock_guard<std::mutex> hold(lock_);
+        max_frames_ = frames;
     }
     void SetQueueFast(bool fast) override {
         std::lock_guard<std::mutex> hold(lock_);
@@ -431,6 +442,7 @@ private:
     bool fast_ = false;
     bool then_queued_ = false;              // SetThenQueued
     std::atomic<std::uint64_t> kicks_asked_{0}, kicks_made_{0};   // QueuedFrames
+    std::uint32_t max_frames_ = 0;          // SetMaxQueuedFrames (0: no limit)
     const std::pair<std::uint32_t, std::uint32_t>* last_target_ = nullptr;
     Key last_target_key_{};
     Key last_depth_{};

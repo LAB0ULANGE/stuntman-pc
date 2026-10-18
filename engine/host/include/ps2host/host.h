@@ -140,6 +140,8 @@ struct Options {
     std::string pal_timing;
     /* --audio-steer on|off: else the "audio_steer" setting's, on (SetAudioSteer). */
     std::string audio_steer;
+    /* --render-queue-frames N: else the "render_queue_frames" setting's, 1 (SetRenderQueueFrames). */
+    std::string render_queue_frames;
     /* --render-queue fast|plain: else the "render_queue" setting's, fast (SetRenderQueue). */
     std::string render_queue;
     /* --present-on-render-thread on|off: else the "present_on_render_thread" setting's, on. */

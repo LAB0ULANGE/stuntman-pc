@@ -3,6 +3,7 @@
  * as the software GS (engine/host/src/gs_draw.cpp) would have them.
  */
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -501,6 +502,24 @@ void ThreadedQueueFastFollowsState(ps2gpu::Gpu& gpu) {
           "threaded, fast queue: each draw with its own state");
 }
 
+// A renderer on its own thread kept at most one frame behind
+// (SetMaxQueuedFrames): its thread slowed, the caller waits at each frame
+// rather than queueing more.
+void ThreadedRendererStaysClose(ps2gpu::Gpu& gpu) {
+    std::string error;
+    _putenv_s("PS2GPU_STREAM_DELAY_US", "3000");
+    auto threaded = ps2gpu::CreateThreadedRenderer(ps2gpu::CreateGsRenderer(gpu, &error), false);
+    _putenv_s("PS2GPU_STREAM_DELAY_US", "0");
+    threaded->SetMaxQueuedFrames(1);
+    std::uint64_t most = 0;
+    for (int frame = 0; frame < 8; ++frame) {
+        Rect(*threaded, Target(0x1A8), 0, 0, 8, 8, 0x80000000u + std::uint32_t(frame));
+        threaded->Kick();
+        most = std::max(most, threaded->QueuedFrames());
+    }
+    Check(most <= 1, "threaded: at most one frame queued, the caller waiting");
+}
+
 int main() {
     PacedPicturesChosen();
     std::string error;
@@ -533,6 +552,7 @@ int main() {
     ThreadedRendererAnswers(*gpu, true);
     ThreadedRendererThen(*gpu);
     ThreadedQueueFastFollowsState(*gpu);
+    ThreadedRendererStaysClose(*gpu);
     if (g_failures) std::printf("gpu renderer tests: %d failed\n", g_failures);
     else std::printf("gpu renderer tests: all passed (%s)\n", gpu->Describe().c_str());
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;

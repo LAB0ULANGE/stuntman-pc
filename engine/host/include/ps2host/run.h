@@ -268,6 +268,10 @@ u64 EeFrame();
    depth buffer only when they change, the "render_queue" setting's default
    - or "plain" (--render-queue). */
 void SetRenderQueue(const std::string& mode);
+/* The renderer on its thread at most `frames` frames behind the GS thread,
+   which waits past that (the "render_queue_frames" setting, 1 by default, 0
+   for no limit; --render-queue-frames). */
+void SetRenderQueueFrames(u32 frames);
 /* "check"'s findings: the answers compared, those that differed. */
 bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ);
 /* "check"'s findings: the DATE batches checked, the pixels that differed. */

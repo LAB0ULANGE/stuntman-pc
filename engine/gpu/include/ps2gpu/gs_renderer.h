@@ -281,6 +281,8 @@ public:
     virtual void SetQueueFast(bool fast) { (void)fast; }
     /* ...the frames (Kick) queued and not yet made: how far behind its thread is. */
     virtual std::uint64_t QueuedFrames() const { return 0; }
+    /* ...at most this many frames queued, the caller waiting past them (0: no limit). */
+    virtual void SetMaxQueuedFrames(std::uint32_t frames) { (void)frames; }
     /* ...in "check": TargetToMemory's and DepthToMemory's answers, and those
        that differed from the ones worked out; false if not checking. */
     virtual bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ) {

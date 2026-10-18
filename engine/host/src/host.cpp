@@ -664,6 +664,8 @@ int Run(const Options& options) {
         SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
         SetVulkanThread((!options.vulkan_thread.empty() ? options.vulkan_thread : Setting("vulkan_thread", "on")) == "on");
         SetRenderQueue(!options.render_queue.empty() ? options.render_queue : Setting("render_queue", "fast"));
+        SetRenderQueueFrames(u32(std::stoul(!options.render_queue_frames.empty() ? options.render_queue_frames
+                                                                              : Setting("render_queue_frames", "1"))));
         SetPresentOnRenderThread((!options.present_on_render_thread.empty()
                                       ? options.present_on_render_thread
                                       : Setting("present_on_render_thread", "on")) == "on");
@@ -792,6 +794,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--render-thread" && i + 1 < argc) options.render_thread = argv[++i];
         else if (arg == "--present-on-render-thread" && i + 1 < argc) options.present_on_render_thread = argv[++i];
         else if (arg == "--render-queue" && i + 1 < argc) options.render_queue = argv[++i];
+        else if (arg == "--render-queue-frames" && i + 1 < argc) options.render_queue_frames = argv[++i];
         else if (arg == "--audio-steer" && i + 1 < argc) options.audio_steer = argv[++i];
         else if (arg == "--pal-timing" && i + 1 < argc) options.pal_timing = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
