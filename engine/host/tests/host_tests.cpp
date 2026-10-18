@@ -1933,7 +1933,7 @@ void VblanksFollowTheVideoMode() {
 
 // iop::RunGaps: the real time the IOP stood still between two runs, long
 // ones counted (a sound stream's half-buffer lasts 64 ms); IopWhileEeWaits
-// runs it only on the EE's own thread (not this test's, not a worker's).
+// runs it only in the EE thread's real-time waits (not this test's thread).
 void IopGapsAreMeasured() {
     using namespace ps2host::iop;
     Vm& vm = TheVm();
@@ -1953,7 +1953,7 @@ void IopGapsAreMeasured() {
     vm.threads.erase(903);
     Check(gaps.find("1 over 50 ms") != std::string::npos && ps2host::iop::RunGaps().find("0 over 50 ms") != std::string::npos,
           "the IOP's gaps: one over 50 ms counted, then the count starts again");
-    Check(after >= before && before >= 5'000'000, "the IOP run in the EE's waits only on the EE's thread");
+    Check(after >= before && before >= 5'000'000, "the IOP not run by IopWhileEeWaits outside the EE thread's real-time waits");
 }
 
 void AudioIsSteeredSeamlessly() {
