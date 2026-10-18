@@ -247,6 +247,14 @@ std::string SetDateInPass(const std::string& mode);
 /* The GPU renderer's Vulkan commands made on a thread of their own, not the
    GS thread (the "vulkan_thread" setting, on by default; --vulkan-thread). */
 void SetVulkanThread(bool on);
+/* The GPU renderer on a thread of its own, beside the GS model and the
+   bridge ("on"); "check": the answers it works out for the bridge's
+   write-backs compared with the renderer's (waiting for it each time); "off"
+   (the "render_thread" setting's default; --render-thread): on the GS thread.
+   Returns the mode taken. */
+std::string SetRenderThread(const std::string& mode);
+/* "check"'s findings: the answers compared, those that differed. */
+bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ);
 /* "check"'s findings: the DATE batches checked, the pixels that differed. */
 bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ);
 /* The GPU renderer's internal resolution, now (a GS replay's; a run takes

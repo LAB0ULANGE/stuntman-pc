@@ -1914,6 +1914,22 @@ void SetDateArea(const std::string& mode) {
     if (mode == "full") std::fprintf(stderr, "[gpu] DATE set up over the whole target\n");
 }
 
+std::string SetRenderThread(const std::string& mode) {
+    if (!g_bridge) return "off";
+    // The renderer itself again (its queue run), then on a thread if asked.
+    if (std::unique_ptr<ps2gpu::GsRenderer> inner = g_bridge->renderer->TakeInner())
+        g_bridge->renderer = std::move(inner);
+    if (mode != "on" && mode != "check") return "off";
+    g_bridge->renderer = ps2gpu::CreateThreadedRenderer(std::move(g_bridge->renderer), mode == "check");
+    if (mode == "check")
+        std::fprintf(stderr, "[gpu] the renderer on a thread of its own, its answers checked\n");
+    return mode;
+}
+
+bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ) {
+    return g_bridge && g_bridge->renderer->RenderThreadCheck(answers, differ);
+}
+
 void SetVulkanThread(bool on) {
     if (!g_bridge) return;
     if (on && !g_bridge->renderer->SetRecordThread(true))

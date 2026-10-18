@@ -136,6 +136,8 @@ struct Options {
     std::string date_area;
     /* --date-in-pass off|on|check: else the "date_in_pass" setting's, on (SetDateInPass). */
     std::string date_in_pass;
+    /* --render-thread off|on|check: else the "render_thread" setting's, off (SetRenderThread). */
+    std::string render_thread;
     /* --vulkan-thread on|off: else the "vulkan_thread" setting's, on (SetVulkanThread). */
     std::string vulkan_thread;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */

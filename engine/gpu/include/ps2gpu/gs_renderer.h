@@ -263,6 +263,16 @@ public:
     virtual void SetDateArea(bool batch) { (void)batch; }
     /* The Vulkan commands made on a thread of their own (true), not the
        one drawing (false, the default). Returns whether they are. */
+    /* A renderer made on a thread of its own (CreateThreadedRenderer): the
+       one it runs, its queue run first; null for any other. */
+    virtual std::unique_ptr<GsRenderer> TakeInner() { return nullptr; }
+    /* ...in "check": TargetToMemory's and DepthToMemory's answers, and those
+       that differed from the ones worked out; false if not checking. */
+    virtual bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ) {
+        (void)answers;
+        (void)differ;
+        return false;
+    }
     virtual bool SetRecordThread(bool on) {
         (void)on;
         return false;
@@ -352,6 +362,10 @@ public:
     }
 };
 std::unique_ptr<GsRenderer> CreateGsRenderer(Gpu& gpu, std::string* error);
+/* `inner` on a thread of its own (threaded_renderer.cpp): its calls queued and
+   made there in order; with `check`, the answers it works out instead of
+   waiting compared with the renderer's. */
+std::unique_ptr<GsRenderer> CreateThreadedRenderer(std::unique_ptr<GsRenderer> inner, bool check);
 
 /* How often the CPU has waited for the GPU to finish what was submitted, and
    for how long in all: "N submissions, S s waiting". */

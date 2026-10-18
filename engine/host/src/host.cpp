@@ -662,6 +662,7 @@ int Run(const Options& options) {
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
         SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
         SetVulkanThread((!options.vulkan_thread.empty() ? options.vulkan_thread : Setting("vulkan_thread", "on")) == "on");
+        SetRenderThread(!options.render_thread.empty() ? options.render_thread : Setting("render_thread", "off"));
         if (options.gs_no_draw) gs::TheGs().on_draw = nullptr;     // (--gs-no-draw: nor the GPU)
     }
     bool sound = false;
@@ -782,6 +783,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--date-area" && i + 1 < argc) options.date_area = argv[++i];
         else if (arg == "--date-in-pass" && i + 1 < argc) options.date_in_pass = argv[++i];
         else if (arg == "--vulkan-thread" && i + 1 < argc) options.vulkan_thread = argv[++i];
+        else if (arg == "--render-thread" && i + 1 < argc) options.render_thread = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;

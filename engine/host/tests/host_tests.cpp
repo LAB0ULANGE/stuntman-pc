@@ -2030,6 +2030,8 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         // that thread slowed (what waits for it must).
         _putenv_s("PS2GPU_STREAM_DELAY_US", way == 2 ? "300" : "0");
         ps2host::SetVulkanThread(way != 1);
+        // The renderer on a thread of its own, its answers checked the third time.
+        ps2host::SetRenderThread(way == 0 ? "on" : way == 1 ? "off" : "check");
         const u32 fbp = way == 0 ? 0x10 : way == 1 ? 0x30 : 0x50;
         const u32 colour = way == 0 ? 0 : way == 1 ? 0x01010101u : 0x02020202u;
         auto soft = std::make_unique<Gs>();
@@ -2043,6 +2045,11 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         Check(same, way == 0   ? "GPU bridge: images at two widths over one memory, and DATE, read back as the GS has it"
                     : way == 1 ? "GPU bridge: the same, newer images looked for among all, DATE set up over the target"
                                : "GPU bridge: the same, DATE set up within the pass and checked");
+        if (way == 2) {
+            std::uint64_t answers = 0, differ = 1;
+            Check(ps2host::RenderThreadCheck(&answers, &differ) && answers > 0 && differ == 0,
+                  "GPU bridge: the renderer on a thread of its own answers write-backs as it would have");
+        }
         if (way == 2 && in_pass == "check") {
             std::uint64_t batches = 0, differ = 1;
             Check(ps2host::DateInPassCheck(&batches, &differ) && batches >= 3 && differ == 0,
@@ -2052,6 +2059,7 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         }
     }
     ps2host::SetDateInPass("off");
+    ps2host::SetRenderThread("off");
     ps2host::SetVulkanThread(false);
     _putenv_s("PS2GPU_STREAM_DELAY_US", "0");
     ps2host::SetDateArea("batch");

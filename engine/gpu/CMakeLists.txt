@@ -105,7 +105,8 @@ add_custom_target(ps2gpu_shaders DEPENDS ${PS2GPU_SHADER_HEADERS})
 add_library(ps2gpu STATIC
     ${CMAKE_CURRENT_LIST_DIR}/src/vulkan_display.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/gpu.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/src/gs_renderer.cpp)
+    ${CMAKE_CURRENT_LIST_DIR}/src/gs_renderer.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/threaded_renderer.cpp)
 add_dependencies(ps2gpu ps2gpu_shaders)
 target_include_directories(ps2gpu PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include PRIVATE ${PS2GPU_SHADER_DIR})
 target_compile_features(ps2gpu PUBLIC cxx_std_17)
