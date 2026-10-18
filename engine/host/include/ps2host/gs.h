@@ -166,6 +166,7 @@ public:
         u32 count;
         u64 fogcol;
         bool pabe;
+        bool colclamp;      // COLCLAMP: off, a blend wraps round
     };
     std::function<void(const DrawCall&)> on_draw;
     /* --gpu: the GS model draws nothing itself (rasterize false) and a second

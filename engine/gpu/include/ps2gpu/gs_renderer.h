@@ -121,6 +121,10 @@ struct GsDrawState {
     BlendAlpha c = BlendAlpha::Source;
     std::uint32_t fix = 0x80;
     bool pabe = false;                                   /* PABE: blend only where As >= 0x80 */
+    /* COLCLAMP: the blend's result clamped to 0-255; off, its low eight bits
+       (it wraps round - Stuntman counts its shadow volumes so, adding 1 and
+       0xFF). */
+    bool colclamp = true;
 
     /* Fog (PRIM.FGE): C = (F * C + (255 - F) * FOGCOL) / 256, colour only. */
     bool fog = false;

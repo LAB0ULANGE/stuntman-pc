@@ -64,7 +64,8 @@ struct FragmentParams {
     std::uint32_t logic, keep;
     std::uint32_t scale;        // the texture's pixels to a GS texel (a target drawn larger: the internal resolution)
     std::uint32_t blend_ops;    // bits 0-7: blending in the shader, ALPHA's A, B, C, D, two bits each;
-                                // 8-15: a sprite on a target drawn larger, the target's scale (0: none)
+                                // 8-15: a sprite on a target drawn larger, the target's scale (0: none);
+                                // 16: a 16-bit target; 17: COLCLAMP off (the blend wraps round)
 };
 constexpr std::uint32_t kFragmentOffset = 16;
 
@@ -200,6 +201,10 @@ bool ShaderBlend(const GsDrawState& s) {
     // in the dark).
     if (Is16Bit(s.psm)) return true;
     if (s.a == s.b) return false;
+    // COLCLAMP off: the result wraps round where the blender would clamp it
+    // (Stuntman's shadow volumes, counted by adding 1 and 0xFF to a byte -
+    // clamped, the count stuck at 255 and the road went dark).
+    if (!s.colclamp) return true;
     // The destination's alpha as the factor (C = Ad): over 128 on the GS,
     // over 255 as the blender reads a byte (DST_ALPHA) - at half its strength.
     // In the shader for a small target (Burnout 3's sky: its 64x32 gradient
@@ -277,7 +282,8 @@ bool SameBatch(const GsDrawState& x, const GsDrawState& y) {
            x.tex_target_psm == y.tex_target_psm && x.tex_format == y.tex_format && x.ta0 == y.ta0 &&
            x.ta1 == y.ta1 && x.aem == y.aem)) &&
            x.alpha_test == y.alpha_test && (!x.alpha_test || (x.atst == y.atst && x.aref == y.aref && x.afail == y.afail)) &&
-           PipelineKey(x) == PipelineKey(y) && (!x.blend || (x.fix == y.fix && x.pabe == y.pabe)) && x.depth == y.depth &&
+           PipelineKey(x) == PipelineKey(y) &&
+           (!x.blend || (x.fix == y.fix && x.pabe == y.pabe && x.colclamp == y.colclamp)) && x.depth == y.depth &&
            (!x.depth || (x.zbp == y.zbp && x.ztst == y.ztst && x.depth_write == y.depth_write)) &&
            x.fog == y.fog && (!x.fog || x.fogcol == y.fogcol) && x.date == y.date && (!x.date || x.datm == y.datm) &&
            x.sprite == y.sprite && x.sprite_prim == y.sprite_prim;
@@ -309,7 +315,7 @@ const char* BreakReason(const GsDrawState& x, const GsDrawState& y) {
     if (x.alpha_test != y.alpha_test || (x.alpha_test && (x.atst != y.atst || x.aref != y.aref || x.afail != y.afail)))
         return "alpha test";
     if (PipelineKey(x) != PipelineKey(y)) return "pipeline (blend, depth test, ...)";
-    if (x.blend && (x.fix != y.fix || x.pabe != y.pabe)) return "blend FIX/PABE";
+    if (x.blend && (x.fix != y.fix || x.pabe != y.pabe || x.colclamp != y.colclamp)) return "blend FIX/PABE/COLCLAMP";
     if (x.depth != y.depth || (x.depth && (x.zbp != y.zbp || x.ztst != y.ztst || x.depth_write != y.depth_write)))
         return "depth";
     if (x.fog != y.fog || (x.fog && x.fogcol != y.fogcol)) return "fog";
@@ -3011,6 +3017,7 @@ void VulkanGsRenderer::Flush() {
                        std::uint32_t(state_.d) << 6;
     if (state_.textured && t->scale > 1) params.blend_ops |= (t->scale & 0xFFu) << 8;
     if (Is16Bit(state_.psm)) params.blend_ops |= 1u << 16;    // gs.frag: colour cut to five bits a channel
+    if (!state_.colclamp) params.blend_ops |= 1u << 17;       // gs.frag: the blend's low eight bits
     const std::uint32_t count = std::uint32_t(pending_.size());
     static int complaints = 0;
     if ((!pipeline || !set) && complaints < 5) {

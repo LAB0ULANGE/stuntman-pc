@@ -226,6 +226,7 @@ struct Bridge {
     std::vector<std::vector<Owned*>> owned_pages = std::vector<std::vector<Owned*>>(512);
     u64 visit = 0;
     bool owned_index = true;
+    bool colclamp_wrap = true;          // SetColclampWrap
     mutable std::vector<Owned*> newer;
     mutable bool newer_sorted = true;
     bool newer_list = true;
@@ -1419,7 +1420,8 @@ void OnDraw(const gs::Gs::DrawCall& call) {
     };
     static Fast fast;
     const u64 regs[12] = {call.prim, c.frame, c.scissor, c.tex0, c.tex1, c.clamp, c.alpha, c.test, c.zbuf,
-                          call.texa, call.fogcol | (u64(call.pabe) << 63), c.miptbp1 ^ (c.miptbp2 * 31)};
+                          call.texa, call.fogcol | (u64(call.pabe) << 63) | (u64(!call.colclamp) << 62),
+                          c.miptbp1 ^ (c.miptbp2 * 31)};
     if (s.primary && fast.valid && fast.mutations == g_mutations && fast.context == call.context &&
         rows <= fast.rows && std::memcmp(regs, fast.regs, sizeof regs) == 0 && !s.Dumping() &&
         (!fast.source || !fast.source->stale)) {
@@ -1549,6 +1551,7 @@ void OnDraw(const gs::Gs::DrawCall& call) {
     state.d = ps2gpu::BlendColour(std::min(2u, Bits(c.alpha, 6, 2)));
     state.fix = Bits(c.alpha, 32, 8);
     state.pabe = call.pabe;
+    state.colclamp = call.colclamp || !s.colclamp_wrap;
     state.fog = (call.prim >> 5) & 1;
     state.fogcol = u32(call.fogcol & 0xFFFFFF);
     // Depth: ZTE with ZBUF.
@@ -2055,6 +2058,12 @@ void SetOwnedIndex(bool on) {
     if (!g_bridge) return;
     g_bridge->owned_index = on;
     if (!on) std::fprintf(stderr, "[gpu] images over blocks: looked for among all\n");
+}
+
+void SetColclampWrap(bool on) {
+    if (!g_bridge) return;
+    g_bridge->colclamp_wrap = on;
+    if (!on) std::fprintf(stderr, "[gpu] COLCLAMP off taken as on: blends clamp (colclamp_wrap=off)\n");
 }
 
 void SetNewerList(bool on) {

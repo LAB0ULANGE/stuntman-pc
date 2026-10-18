@@ -291,14 +291,17 @@ void main() {
     if (p.pabe == 2u && c.a >= 128.0) discard;
 
 #ifdef SHADER_BLEND
-    // Cv = ((A - B) * C >> 7) + D, clamped (COLCLAMP), as the software GS.
+    // Cv = ((A - B) * C >> 7) + D, clamped (COLCLAMP) or its low eight bits
+    // (COLCLAMP off, bit 17), as the software GS.
     vec4 dst = round(texelFetch(destination, ivec2(gl_FragCoord.xy), 0) * 255.0);
     uint ops = p.blend_ops & 255u;
     vec3 op_a = (ops & 3u) == 0u ? c.rgb : (ops & 3u) == 1u ? dst.rgb : vec3(0.0);
     vec3 op_b = ((ops >> 2) & 3u) == 0u ? c.rgb : ((ops >> 2) & 3u) == 1u ? dst.rgb : vec3(0.0);
     float op_c = ((ops >> 4) & 3u) == 0u ? c.a : ((ops >> 4) & 3u) == 1u ? dst.a : float(p.fix);
     vec3 op_d = ((ops >> 6) & 3u) == 0u ? c.rgb : ((ops >> 6) & 3u) == 1u ? dst.rgb : vec3(0.0);
-    c.rgb = clamp(floor((op_a - op_b) * op_c / 128.0) + op_d, 0.0, 255.0);
+    vec3 blended = floor((op_a - op_b) * op_c / 128.0) + op_d;
+    c.rgb = ((p.blend_ops >> 17) & 1u) != 0u ? blended - 256.0 * floor(blended / 256.0)
+                                             : clamp(blended, 0.0, 255.0);
 #endif
     // A 16-bit target keeps the top five bits of each colour byte.
     if (((p.blend_ops >> 16) & 1u) != 0u) c.rgb = floor(c.rgb / 8.0) * 8.0;
