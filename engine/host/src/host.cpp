@@ -638,6 +638,9 @@ int Run(const Options& options) {
     SetFrameTimes(options.frame_times);
     gs::TheGs().whole_qwords =
         (!options.gs_whole_qwords.empty() ? options.gs_whole_qwords : Setting("gs_whole_qwords", "on")) != "off";
+    // A measure of all but the drawing (the EE's ceiling): the GS takes the
+    // primitives in and draws none, nothing drawing in its stead.
+    if (options.gs_no_draw) gs::TheGs().rasterize = false;
     if (options.gpu || options.gpu_shadow) {
         std::string error;
         const GpuMode mode = options.gpu ? GpuMode::Primary : options.gpu_shadow_rtt ? GpuMode::ShadowRtt : GpuMode::Shadow;
@@ -653,6 +656,7 @@ int Run(const Options& options) {
         SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
         SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
+        if (options.gs_no_draw) gs::TheGs().on_draw = nullptr;     // (--gs-no-draw: nor the GPU)
     }
     bool sound = false;
     if (options.audio) {
@@ -736,6 +740,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--until-frame" && i + 1 < argc) options.until_frame = std::stoull(argv[++i]);
         else if (arg == "--frame-times" && i + 1 < argc) options.frame_times = unsigned(std::stoul(argv[++i]));
         else if (arg == "--gs-inline") options.gs_inline = true;
+        else if (arg == "--gs-no-draw") options.gs_no_draw = true;
         else if (arg == "--gs-trace-frame" && i + 1 < argc) options.gs_trace_frame = std::stoll(argv[++i]);
         else if (arg == "--gs-dump-frame" && i + 1 < argc) options.gs_dump_frame = std::stoll(argv[++i]);
         else if (arg == "--sample") options.sample = true;

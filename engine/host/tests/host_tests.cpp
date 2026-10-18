@@ -502,6 +502,27 @@ void GsTakesWholeQuadwordsAsWords() {
           "GS: packets taken a quadword at a time draw as a word at a time");
 }
 
+// --gs-no-draw (a measure: all but the drawing): the GS takes the primitives
+// in and draws none, nothing hearing of them in its stead.
+void GsTakesPrimitivesInWithoutDrawing() {
+    using namespace ps2host::gs;
+    Gs gs;
+    gs.rasterize = false;
+    gs.WriteRegister(0x4C, u64(1) << 16 | u64(PSMCT32) << 24);         // FRAME 64 wide
+    gs.WriteRegister(0x40, u64(63) << 16 | u64(63) << 48);
+    for (u32 k = 0; k < 4; ++k) {
+        gs.WriteRegister(0x00, 6);                                      // a sprite
+        gs.WriteRegister(0x01, 0x80402010u);
+        gs.WriteRegister(0x05, u64((k * 8) << 4) | u64((k * 4) << 4) << 16);
+        gs.WriteRegister(0x05, u64((k * 8 + 12) << 4) | u64((k * 4 + 9) << 4) << 16);
+    }
+    gs.Finish();
+    bool blank = true;
+    for (u32 y = 0; y < 64; ++y)
+        for (u32 x = 0; x < 64; ++x) blank = blank && gs.memory.Read(0, 1, x, y, PSMCT32) == 0;
+    Check(gs.primitives() == 4 && blank, "GS: primitives taken in, none drawn (--gs-no-draw)");
+}
+
 // Primitives drawn in bands of rows on several threads: one over the same
 // memory through another width (the rows of one are other rows of the
 // other) still lands after the one before it.
@@ -2385,6 +2406,7 @@ int main() {
     GsDrawsASprite();
     GsDrawsInOrderAcrossWidths();
     GsTakesWholeQuadwordsAsWords();
+    GsTakesPrimitivesInWithoutDrawing();
     GsWeavesFieldsAsATelevision();
     GsFogsTowardsFogcol();
     GsLoadsACsm2Clut();
