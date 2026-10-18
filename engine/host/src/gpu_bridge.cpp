@@ -44,6 +44,7 @@
 
 #include <algorithm>
 #include <bitset>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -2079,7 +2080,12 @@ void GpuCaptureBegin(u64 frame, const std::string& passes_dir) {
     if (!g_bridge) return;
     g_bridge->dump_passes = passes_dir;
     g_bridge->dump_frame = (long long)frame;
-    g_bridge->dump_last = (long long)frame + 1;     // a game drawing a picture every other blank
+    g_bridge->dump_last = LLONG_MAX;                // until GpuCaptureEnd
+}
+
+void GpuCaptureEnd() {
+    if (!g_bridge) return;
+    g_bridge->dump_frame = g_bridge->dump_last = -1;
 }
 
 std::string GpuCaptureScreen(const std::string& dir) {
@@ -2091,12 +2097,23 @@ std::string GpuCaptureScreen(const std::string& dir) {
     u32 w = 0, h = 0;
     char text[160];
     const u32 k = s.renderer->Scale();
-    if (s.renderer->ReadTargetFull(fbp, fbw, psm, &pixels, &w, &h))
-        WriteBmp(dir + "/screen.bmp", pixels, w, std::min(w, 640u * k), std::min(h, 448u * k));
-    if (s.renderer->ReadTarget(fbp, fbw, psm, &pixels, &w, &h))
-        WriteBmp(dir + "/screen_1x.bmp", pixels, w, std::min(w, 640u), std::min(h, 448u));
-    // Field mode, woven: the picture the window shows (both fields).
     gs::Gs& gs = gs::TheGs();
+    // The lines the display shows, from DBY: in field mode a field, half the
+    // height, each line twice as the screen has it (the rest of the target
+    // is not the picture: written whole, the lower half was other buffers).
+    const u32 dby = gs.DisplayedDby(), lines = gs.ShownLines(), repeat = gs.FieldMode() ? 2 : 1;
+    auto write_shown = [&](const std::string& path, u32 scale) {
+        const u32 shown_w = std::min(w, 640u * scale), top = dby * scale;
+        const u32 shown_h = top < h ? std::min(h - top, lines * scale) : 0;
+        std::vector<u32> shown(std::size_t(shown_w) * shown_h * repeat);
+        for (u32 y = 0; y < shown_h * repeat; ++y)
+            std::memcpy(&shown[std::size_t(y) * shown_w], &pixels[std::size_t(top + y / repeat) * w],
+                        std::size_t(shown_w) * 4);
+        WriteBmp(path, shown, shown_w, shown_w, shown_h * repeat);
+    };
+    if (s.renderer->ReadTargetFull(fbp, fbw, psm, &pixels, &w, &h)) write_shown(dir + "/screen.bmp", k);
+    if (s.renderer->ReadTarget(fbp, fbw, psm, &pixels, &w, &h)) write_shown(dir + "/screen_1x.bmp", 1);
+    // Field mode, woven: the picture the window shows (both fields).
     std::uint64_t image = 0;
     int layout = 0;
     if (gs.weave && gs.FieldMode() &&

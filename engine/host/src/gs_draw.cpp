@@ -305,6 +305,7 @@ void Gs::Draw() {
     std::optional<Timed> timed;
     if (rasterize) timed.emplace(Section::GsDraw);
     ++primitives_;
+    drawn.store(primitives_, std::memory_order_relaxed);
     // The software rasteriser's state; without it (--gpu), made only if the
     // texture is decoded from it - a few thousand of 73 million primitives.
     if (rasterize) Prepare();

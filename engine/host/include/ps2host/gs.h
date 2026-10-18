@@ -112,6 +112,9 @@ public:
     /* --gs-trace: log image transfers and primitives (stderr). */
     bool trace = false;
     std::FILE* trace_out = stderr;      // where the trace goes (a capture's trace.txt)
+    /* primitives() as the EE may read it while the GS thread draws (a
+       capture's end waits for drawing). */
+    std::atomic<std::uint64_t> drawn{0};
 
     /* A GS register write by address (A+D, REGLIST, or the GIF's own). */
     void WriteRegister(u32 address, u64 value);

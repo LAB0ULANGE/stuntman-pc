@@ -539,8 +539,23 @@ bool UntilFrameReached() { return g_until_reached; }
 // the internal resolution and at the PS2's, every drawing pass, GS local
 // memory and the GS trace of the frame.
 std::atomic<bool> g_capture_request{false};
-long long g_capture_frame = -1;
+long long g_capture_frame = -1;     // the frame the capture began at, -1: none
+u64 g_capture_drawn = 0;            // Gs::drawn at the last blank
+int g_capture_drawing = 0;          // blanks since the start the GS drew in
 std::string g_capture_dir;
+
+// The capture ends after three blanks the GS drew in: a picture drawn over
+// two blanks is whole in it, wherever it began. Counted in blanks alone, it
+// ended at once in real time, where a late EE takes its blanks one after
+// another with nothing drawn between (an empty trace, no passes). A game
+// drawing nothing ends after a second.
+bool CaptureDone(u64 frame) {
+    const u64 drawn = gs::TheGs().drawn.load(std::memory_order_relaxed);
+    if (drawn != g_capture_drawn) ++g_capture_drawing;
+    g_capture_drawn = drawn;
+    const long long blanks = (long long)frame - g_capture_frame;
+    return blanks >= 2 && (g_capture_drawing >= 3 || blanks >= 50);
+}
 
 void StartCapture(u64 frame) {
     namespace fs = std::filesystem;
@@ -559,14 +574,14 @@ void StartCapture(u64 frame) {
         return;
     }
     g_capture_dir = dir.string();
-    // Two frames: a game drawing a picture every other blank (Burnout 3)
-    // draws nothing in one of them.
-    g_capture_frame = (long long)frame + 2;
-    GpuCaptureBegin(frame + 1, (dir / "passes").string());
     gs::Gs& g = gs::TheGs();
     // The frames' GS stream (replay.bin), for --gs-replay: memory as it is
     // now, the GPU's drawing in it, the registers, then what comes.
     SyncGs();
+    g_capture_frame = (long long)frame;
+    g_capture_drawn = g.drawn.load(std::memory_order_relaxed);
+    g_capture_drawing = 0;
+    GpuCaptureBegin(frame + 1, (dir / "passes").string());
     g.Finish();
     if (g.on_memory) g.on_memory(0, 16384, false);
     g.BeginRecord(std::fopen((dir / "replay.bin").string().c_str(), "wb"));
@@ -582,6 +597,7 @@ void StartCapture(u64 frame) {
 void FinishCapture(u64 frame) {
     gs::Gs& g = gs::TheGs();
     SyncGs();
+    GpuCaptureEnd();
     g.EndRecord();
     if (g.trace_out != stderr) {
         g.trace = false;
@@ -596,8 +612,9 @@ void FinishCapture(u64 frame) {
         std::fclose(f);
     }
     if (std::FILE* f = std::fopen((g_capture_dir + "/info.txt").c_str(), "w")) {
-        std::fprintf(f, "frame %llu\n%s\nresolution setting: %s\n", static_cast<unsigned long long>(frame),
-                     screen.c_str(), Setting("resolution", "original").c_str());
+        std::fprintf(f, "frame %llu (from %lld, %d blanks drawn in)\n%s\nresolution setting: %s\n",
+                     static_cast<unsigned long long>(frame), g_capture_frame + 1, g_capture_drawing, screen.c_str(),
+                     Setting("resolution", "original").c_str());
         std::fprintf(f, "files: screen.bmp (as drawn, at the internal resolution), screen_1x.bmp (the PS2's "
                         "640x448), passes/ (each target as a pass left it, at 1x), gsmem.bin (GS local memory "
                         "after the frame: engine/tools/gsmem.py), trace.txt (the frame's GS packets and "
@@ -655,7 +672,7 @@ void FrameDone(u64 frame) {
     static const long long capture_at = std::getenv("PS2HOST_CAPTURE_FRAME") ? std::atoll(std::getenv("PS2HOST_CAPTURE_FRAME")) : -1;
     if ((long long)frame == capture_at) g_capture_request = true;
     if (g_capture_request.exchange(false) && g_capture_frame < 0 && GpuPrimary()) StartCapture(frame);
-    const bool capturing = g_capture_frame >= 0 && (long long)frame == g_capture_frame;
+    const bool capturing = g_capture_frame >= 0 && CaptureDone(frame);
     const bool digest = gs::TheGs().digesting;      // PS2HOST_GS_DIGEST: what the frame gave the GS, all of it
     const bool cpu_reads_gs = dump || stash || (g_dump_frame >= 0 && (long long)frame == g_dump_frame) ||
                               g_trace_frame >= 0 || capturing || digest;
