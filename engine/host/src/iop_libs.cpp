@@ -893,7 +893,11 @@ Sound& S() {
     return sound;
 }
 
-Outcome SdInit(Vm&, Context& c) { return Ret(c, KE_OK); }
+Outcome SdInit(Vm&, Context& c) {
+    S().spu.Init();
+    return Ret(c, KE_OK);
+}
+Outcome SdQuit(Vm&, Context& c) { return Ret(c, KE_OK); }
 
 Outcome SdSetParam(Vm&, Context& c) { S().spu.SetParam(c.r[4] & 0xFFFF, c.r[5] & 0xFFFF); return Ret(c, 0); }
 Outcome SdGetParam(Vm&, Context& c) { return Ret(c, S().spu.GetParam(c.r[4] & 0xFFFF)); }
@@ -1128,7 +1132,7 @@ const Map& Table() {
         {{"thfpool", 4}, CreateFpl}, {{"thfpool", 5}, DeleteFpl}, {{"thfpool", 6}, AllocateFpl},
         {{"thfpool", 7}, PollAllocateFpl}, {{"thfpool", 8}, PollAllocateFpl}, {{"thfpool", 9}, FreeFpl},
         {{"loadcore", 5}, FlushDcache},
-        {{"libsd", 2}, SdInit}, {{"libsd", 4}, SdInit},
+        {{"libsd", 2}, SdQuit}, {{"libsd", 4}, SdInit},
         {{"libsd", 5}, SdSetParam}, {{"libsd", 6}, SdGetParam},
         {{"libsd", 7}, SdSetSwitch}, {{"libsd", 8}, SdGetSwitch},
         {{"libsd", 9}, SdSetAddr}, {{"libsd", 10}, SdGetAddr},

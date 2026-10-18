@@ -53,6 +53,12 @@ public:
 
     Spu2() : ram_(2u << 20) {}
 
+    /* What libsd's sceSdInit leaves: every voice of both cores into the dry
+       mix and the reverb (VMIXL, VMIXR, VMIXEL, VMIXER all set). A game
+       that never writes VMIXL takes its voices as heard dry - Stuntman's
+       director, taken out of the reverb only, otherwise went nowhere. */
+    void Init();
+
     void SetParam(u32 entry, u32 value);
     u32 GetParam(u32 entry) const;
     void SetSwitch(u32 entry, u32 value);
@@ -114,6 +120,7 @@ private:
         Phase phase = Phase::Off;
         s32 level = 0;                  // the envelope, 0-0x7FFF
         u32 envelope_counter = 0;
+        s32 peak = 0;                   // PS2HOST_SPU_KEYON: the loudest sent since key on
         // The phase's rate as Envelope works it out from ADSR1/2, kept while
         // the phase and the registers stay (a voice's every sample asked).
         u64 rate_key = ~0ull;

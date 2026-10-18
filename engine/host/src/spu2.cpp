@@ -158,6 +158,11 @@ void Spu2::Decode(Voice& v) {
     DecodeBlock(bytes, v.samples, &v.older, &v.old);
 }
 
+void Spu2::Init() {
+    for (u32 core = 0; core < 2; ++core)
+        for (u32 which : {kVmixl, kVmixr, kVmixel, kVmixer}) cores_[core].switches[which] = 0xFFFFFF;
+}
+
 void Spu2::SetSwitch(u32 entry, u32 value) {
     Core& c = cores_[CoreOf(entry)];
     const u32 which = (entry >> 8) - 0x13;
@@ -166,6 +171,21 @@ void Spu2::SetSwitch(u32 entry, u32 value) {
         case 0x15:                              // KON: start from SSA
             for (u32 i = 0; i < 24; ++i)
                 if (value & (1u << i)) {
+                    // PS2HOST_SPU_KEYON=1: each key on, how the voice is set,
+                    // and how loud its last sound came out.
+                    static const bool log = std::getenv("PS2HOST_SPU_KEYON") != nullptr;
+                    if (log) {
+                        const Voice& v = c.voices[i];
+                        std::fprintf(stderr,
+                                     "[spu2] key on %u:%u at %05X pitch %04X vol %04X/%04X adsr %04X/%04X "
+                                     "dry %d%d wet %d%d main %04X/%04X; its sound before peaked %d\n",
+                                     unsigned(CoreOf(entry)), unsigned(i), unsigned(v.ssa), unsigned(v.pitch),
+                                     unsigned(v.voll), unsigned(v.volr), unsigned(v.adsr1), unsigned(v.adsr2),
+                                     int((c.switches[kVmixl] >> i) & 1), int((c.switches[kVmixr] >> i) & 1),
+                                     int((c.switches[kVmixel] >> i) & 1), int((c.switches[kVmixer] >> i) & 1),
+                                     unsigned(c.mvoll), unsigned(c.mvolr), int(v.peak));
+                    }
+                    c.voices[i].peak = 0;
                     Start(c.voices[i]);
                     c.endx &= ~(1u << i);
                 }
@@ -582,6 +602,7 @@ void Spu2::Advance(u64 now_us, const std::function<void(u32 core)>& irq) {
                     const s32 sample = v.previous + ((current - v.previous) * s32(v.counter & 0xFFF) >> 12);
                     const s32 shaped = (sample * v.level) >> 15;
                     const s32 sent_left = (shaped * v.left.now) >> 15, sent_right = (shaped * v.right.now) >> 15;
+                    v.peak = std::max(v.peak, std::max(std::abs(sent_left), std::abs(sent_right)));
                     if (c.switches[kVmixl] & (1u << i)) core_left += sent_left;
                     if (c.switches[kVmixr] & (1u << i)) core_right += sent_right;
                     if (c.switches[kVmixel] & (1u << i)) wet_left += sent_left;

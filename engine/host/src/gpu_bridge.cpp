@@ -1749,7 +1749,14 @@ bool g_present_on_render_thread = false;     // SetPresentOnRenderThread
 // PresentLag: frames between the EE's and the one being presented, summed,
 // the most, how many; fresh pictures presented.
 std::atomic<u64> g_lag_sum{0}, g_lag_most{0}, g_lag_count{0}, g_shown_fresh{0};
+// How many presents each picture stayed for (1, 2, 3, 4 or more): at 25
+// pictures a second on 50 Hz, all 2s; 1s and 3s mixed are a judder the
+// averages above hide.
+std::atomic<u64> g_held[4]{};
 void NotePresented(u64 frame, bool fresh) {
+    static u64 held = 0;
+    if (fresh && held) ++g_held[std::min<u64>(held, 4) - 1];
+    held = fresh ? 1 : held + 1;
     const u64 now = EeFrame(), lag = now > frame ? now - frame : 0;
     g_lag_sum += lag;
     ++g_lag_count;
@@ -1962,11 +1969,14 @@ std::string PresentLag() {
     const u64 fresh = g_shown_fresh.exchange(0);
     const u64 queued = g_bridge ? g_bridge->renderer->QueuedFrames() : 0;
     if (!count && !queued) return "";
-    char text[200];
-    std::snprintf(text, sizeof text, ", presented %llu (%llu new pictures), the EE %.1f frames ahead (at most %llu), "
-                                     "%llu frames queued for the renderer",
-                  (unsigned long long)count, (unsigned long long)fresh, count ? double(sum) / double(count) : 0.0,
-                  (unsigned long long)most, (unsigned long long)queued);
+    u64 held[4];
+    for (int i = 0; i < 4; ++i) held[i] = g_held[i].exchange(0);
+    char text[300];
+    std::snprintf(text, sizeof text, ", presented %llu (%llu new pictures, held 1/2/3/4+ presents: %llu/%llu/%llu/%llu), "
+                                     "the EE %.1f frames ahead (at most %llu), %llu frames queued for the renderer",
+                  (unsigned long long)count, (unsigned long long)fresh, (unsigned long long)held[0],
+                  (unsigned long long)held[1], (unsigned long long)held[2], (unsigned long long)held[3],
+                  count ? double(sum) / double(count) : 0.0, (unsigned long long)most, (unsigned long long)queued);
     return text;
 }
 

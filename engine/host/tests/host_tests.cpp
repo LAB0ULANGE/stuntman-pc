@@ -2559,6 +2559,28 @@ void SpuDecodesAdpcmAndPlaysAVoice() {
     Check(tail.size() == 2 * 9600 && tail[0] == 0, "SPU2: nothing dry");
     Check(loud_late > 100, "SPU2: the reverb's tail, long after the sound ended");
     Check(wet.SetEffectAttr(0, 10, 0, 0, 0, 0) == -1, "SPU2: no eleventh preset");
+
+    // After sceSdInit, a voice is heard dry with no VMIX written (Stuntman's
+    // director: taken out of the reverb, never put in the dry mix).
+    Spu2 init;
+    init.Init();
+    Check(init.GetSwitch(0x1800) == 0xFFFFFF && init.GetSwitch(0x1B01) == 0xFFFFFF,
+          "SPU2: sceSdInit puts every voice of both cores in the dry and wet mixes");
+    init.Write(0x5000, loop, 16);
+    std::vector<Spu2::s16> dry;
+    init.SetOutput([&](const Spu2::s16* frames, Spu2::u32 count) { dry.assign(frames, frames + 2 * count); });
+    init.SetAddr(0x2000, 0x5000);
+    init.SetParam(0x0000, 0x3FFF);
+    init.SetParam(0x0100, 0x3FFF);
+    init.SetParam(0x0200, 0x1000);
+    init.SetParam(0x0300, 0x000F);
+    init.SetParam(0x0400, 0x1FC0);
+    init.SetSwitch(0x1900, 0);                      // out of the reverb, as the director is
+    init.SetSwitch(0x1B00, 0);
+    init.SetSwitch(0x1500, 1);
+    init.Advance(1000, none);
+    init.Advance(2000, none);
+    Check(dry.size() == 96 && dry[90] > 3500 && dry[91] > 3500, "SPU2: after sceSdInit, a voice out of the reverb is heard dry");
 }
 
 int main() {
