@@ -527,6 +527,12 @@ bool OpenAudio();
    queued for the device stays near kSteerTarget buffers ("audio_steer"
    setting, off by default; --audio-steer). */
 void SetAudioSteer(bool on);
+/* Real time's vertical blanks at 50 Hz when the game sets up PAL (SetGsCrt
+   mode 3; VideoModeAsked), not NTSC's 59.94 always (the "pal_timing" setting,
+   off by default; --pal-timing). A virtual-time run keeps 59.94. */
+void SetPalTiming(bool on);
+void VideoModeAsked(u32 mode);
+u32 VblankPeriodUs();
 constexpr double kSteerTarget = 4.0;
 /* The rate to play at for `level` frames queued, aiming at `target`, of `capacity`. */
 double SteerRatio(double level, double target, double capacity);

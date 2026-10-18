@@ -433,12 +433,17 @@ void SleepUntil(std::chrono::steady_clock::time_point when) {
     else std::this_thread::sleep_until(when);
 }
 
+// The real-time blanks' period (VideoModeAsked): NTSC's 59.94 Hz, or PAL's
+// 50 when the game sets PAL up and pal_timing is on.
+std::atomic<u32> g_vblank_us{16683};
+std::atomic<bool> g_pal_timing{false};
+
 void VblankTimer() {
     using clock = std::chrono::steady_clock;
-    const auto period = std::chrono::microseconds(16683);      // NTSC, 59.94 Hz
     const auto margin = std::chrono::microseconds(700);    // the precise sleep's (SleepUntil), then a spin
-    auto next = clock::now() + period;
+    auto next = clock::now() + std::chrono::microseconds(g_vblank_us.load());
     while (!StopRequested() && !g_timer_stop) {
+        const auto period = std::chrono::microseconds(g_vblank_us.load(std::memory_order_relaxed));
         // Sleep to the next vertical blank, or to an EE timer's interrupt if that
         // comes first.
         Scheduler& s = S();
@@ -1175,6 +1180,15 @@ void SetFastForward(unsigned factor) {
 }
 unsigned FastForward() { return g_fast_forward.load(std::memory_order_relaxed); }
 u64 LastVblankNs() { return g_last_vblank_ns.load(std::memory_order_relaxed); }
+void SetPalTiming(bool on) { g_pal_timing = on; }
+void VideoModeAsked(u32 mode) {
+    // SetGsCrt's mode: 2 NTSC, 3 PAL (the vertical blanks of real time follow; a
+    // virtual-time run keeps its own, the same in every run).
+    const u32 us = g_pal_timing.load() && mode == 3 ? 20000 : 16683;
+    if (g_vblank_us.exchange(us) != us)
+        std::fprintf(stderr, "[host] vertical blanks every %u us (%s)\n", unsigned(us), us == 20000 ? "PAL" : "NTSC");
+}
+u32 VblankPeriodUs() { return g_vblank_us.load(); }
 
 void FastThread() {
     THREAD_POWER_THROTTLING_STATE throttling{};

@@ -108,6 +108,7 @@ void KernelSyscall(lifted::Context& c) {
     // (SetGsCrt: each video mode asked for - NTSC, PAL - noted, not only the first)
     else Note("syscall " + std::to_string(service) + (number == 0x02 ? " " + std::to_string(Arg(c, 1)) : ""), text);
     Kernel& k = K();
+    if (number == 0x02) VideoModeAsked(Arg(c, 1));     // SetGsCrt: the blanks' rate follows PAL or NTSC
     // A service the program installed itself (SetSyscall) runs its own handler,
     // in kernel mode on the console - here, as any other guest function.
     if (const u32 handler = TableEntry(number)) {

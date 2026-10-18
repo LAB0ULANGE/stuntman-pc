@@ -1917,6 +1917,20 @@ void GsThreadWakesForEveryPacket() {
 // The sound steered (audio_steer): faster above the target fill, slower
 // below, 1% at most; resampled seamlessly across batches - a sine wave cut
 // into batches of any size comes out with no jump, at the rate asked.
+// pal_timing: real time's blanks follow the video mode the game sets up -
+// PAL's 50 Hz, NTSC's 59.94 - and stay NTSC's with the setting off.
+void VblanksFollowTheVideoMode() {
+    ps2host::SetPalTiming(true);
+    ps2host::VideoModeAsked(3);
+    const u32 pal = ps2host::VblankPeriodUs();
+    ps2host::VideoModeAsked(2);
+    const u32 ntsc = ps2host::VblankPeriodUs();
+    ps2host::SetPalTiming(false);
+    ps2host::VideoModeAsked(3);
+    const u32 off = ps2host::VblankPeriodUs();
+    Check(pal == 20000 && ntsc == 16683 && off == 16683, "real time's blanks: PAL's 50 Hz when the game sets PAL up");
+}
+
 void AudioIsSteeredSeamlessly() {
     const double cap = 8 * 1024.0, target = 4 * 1024.0;
     Check(ps2host::SteerRatio(target, target, cap) == 1.0 && ps2host::SteerRatio(cap, target, cap) > 1.0 &&
@@ -2555,6 +2569,7 @@ int main() {
     SettingsReportSaysWhatDiffers();
     PictureRateCountsGamePictures();
     AudioIsSteeredSeamlessly();
+    VblanksFollowTheVideoMode();
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();
     GpuBridgeKeepsMemoryAsTheGs();                  // near the end: it puts the GPU in the GS's stead

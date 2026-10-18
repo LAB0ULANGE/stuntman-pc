@@ -590,6 +590,7 @@ int Run(const Options& options) {
     GuestMemory().WatchReads(options.watch_reads);
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
+    SetPalTiming((!options.pal_timing.empty() ? options.pal_timing : Setting("pal_timing", "off")) == "on");
     SetVif1StcNoWait((!options.vif1_stc_no_wait.empty() ? options.vif1_stc_no_wait
                                                           : Setting("vif1_stc_no_wait", "on")) == "on");
     // A check: the worker in virtual time too, the run otherwise the same.
@@ -792,6 +793,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--present-on-render-thread" && i + 1 < argc) options.present_on_render_thread = argv[++i];
         else if (arg == "--render-queue" && i + 1 < argc) options.render_queue = argv[++i];
         else if (arg == "--audio-steer" && i + 1 < argc) options.audio_steer = argv[++i];
+        else if (arg == "--pal-timing" && i + 1 < argc) options.pal_timing = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;
