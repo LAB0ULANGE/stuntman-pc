@@ -111,7 +111,7 @@ struct Options {
     bool check_guesses = false;    /* --check-guesses: GIF_STAT guesses checked (virtual time) */
     bool vif1_sync = false;        /* --vif1-sync: VIF1 on the EE's thread in real time too */
     bool vif1_worker_virtual = false;  /* --vif1-worker-virtual: VIF1's worker in virtual time too (a check) */
-    /* --vif1-stc-no-wait on|off: else the "vif1_stc_no_wait" setting's, off (SetVif1StcNoWait). */
+    /* --vif1-stc-no-wait on|off: else the "vif1_stc_no_wait" setting's, on (SetVif1StcNoWait). */
     std::string vif1_stc_no_wait;
     std::string vu_record;         /* --vu-record: the microprograms run, for vurecomp.py */
     /* --deinterlace weave|off: field mode's pictures, both fields woven as a
@@ -136,7 +136,7 @@ struct Options {
     std::string date_area;
     /* --date-in-pass off|on|check: else the "date_in_pass" setting's, on (SetDateInPass). */
     std::string date_in_pass;
-    /* --vulkan-thread on|off: else the "vulkan_thread" setting's, off (SetVulkanThread). */
+    /* --vulkan-thread on|off: else the "vulkan_thread" setting's, on (SetVulkanThread). */
     std::string vulkan_thread;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
     bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */

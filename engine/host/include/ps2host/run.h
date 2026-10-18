@@ -245,7 +245,7 @@ void SetDateArea(const std::string& mode);
    Returns the mode taken ("off" where the GPU cannot). */
 std::string SetDateInPass(const std::string& mode);
 /* The GPU renderer's Vulkan commands made on a thread of their own, not the
-   GS thread (the "vulkan_thread" setting, off by default; --vulkan-thread). */
+   GS thread (the "vulkan_thread" setting, on by default; --vulkan-thread). */
 void SetVulkanThread(bool on);
 /* "check"'s findings: the DATE batches checked, the pixels that differed. */
 bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ);
@@ -287,7 +287,7 @@ void StartVif1Worker();
 void SetVif1Worker(bool on);
 /* VIF1_FBRST written with STC alone (a stall at an interrupt bit ended): the
    EE goes on without waiting for VIF1's worker (the "vif1_stc_no_wait"
-   setting, off by default; --vif1-stc-no-wait). */
+   setting, on by default; --vif1-stc-no-wait). */
 void SetVif1StcNoWait(bool on);
 bool Vif1StcNoWait();
 /* ...the writes that went on so with the worker busy (would have waited). */

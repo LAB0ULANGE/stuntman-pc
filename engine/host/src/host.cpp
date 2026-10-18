@@ -591,7 +591,7 @@ int Run(const Options& options) {
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
     SetVif1StcNoWait((!options.vif1_stc_no_wait.empty() ? options.vif1_stc_no_wait
-                                                          : Setting("vif1_stc_no_wait", "off")) == "on");
+                                                          : Setting("vif1_stc_no_wait", "on")) == "on");
     // A check: the worker in virtual time too, the run otherwise the same.
     if (options.vif1_worker_virtual && !options.vif1_sync) StartVif1Worker();
     if (std::getenv("PS2HOST_GS_DIGEST")) gs::TheGs().digesting = true;
@@ -661,7 +661,7 @@ int Run(const Options& options) {
         SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
         SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
-        SetVulkanThread((!options.vulkan_thread.empty() ? options.vulkan_thread : Setting("vulkan_thread", "off")) == "on");
+        SetVulkanThread((!options.vulkan_thread.empty() ? options.vulkan_thread : Setting("vulkan_thread", "on")) == "on");
         if (options.gs_no_draw) gs::TheGs().on_draw = nullptr;     // (--gs-no-draw: nor the GPU)
     }
     bool sound = false;
