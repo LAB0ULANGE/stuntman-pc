@@ -470,6 +470,11 @@ bool VulkanDisplay::CreateSwapchain() {
     swapchain_ = created;
     vkGetSwapchainImagesKHR(device_, swapchain_, &n, nullptr);
     images_.resize(n);
+    std::fprintf(stderr, "[window] swapchain: %ux%u, %u images, %s\n", extent_.width, extent_.height, unsigned(n),
+                 mode_ == VK_PRESENT_MODE_FIFO_KHR        ? "FIFO (vsync)"
+                 : mode_ == VK_PRESENT_MODE_MAILBOX_KHR   ? "MAILBOX"
+                 : mode_ == VK_PRESENT_MODE_IMMEDIATE_KHR ? "IMMEDIATE"
+                                                          : "another mode");
     vkGetSwapchainImagesKHR(device_, swapchain_, &n, images_.data());
     VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     rendered_.resize(n);

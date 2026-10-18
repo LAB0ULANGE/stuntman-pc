@@ -144,7 +144,11 @@ public:
     }
     void Kick() override {
         std::lock_guard<std::mutex> hold(lock_);
-        Queue([r = inner_.get()](void*) { r->Kick(); });
+        ++kicks_asked_;
+        Queue([r = inner_.get(), made = &kicks_made_](void*) {
+            r->Kick();
+            made->fetch_add(1, std::memory_order_relaxed);
+        });
         if (check_ && ++kicks_ % 600 == 0)
             std::fprintf(stderr, "[ps2gpu] render thread check: %llu answers compared, %llu differed%c",
                          (unsigned long long)answers_, (unsigned long long)differ_, 10);
@@ -258,6 +262,9 @@ public:
         return known;
     }
     bool BlockCompression() const override { return inner_->BlockCompression(); }     // (the device's)
+    std::uint64_t QueuedFrames() const override {
+        return kicks_asked_.load(std::memory_order_relaxed) - kicks_made_.load(std::memory_order_relaxed);
+    }
     bool Then(std::function<void(GsRenderer&)> call) override {
         std::lock_guard<std::mutex> hold(lock_);
         if (!then_queued_) {
@@ -423,6 +430,7 @@ private:
     // picture, most with the state of the one before.
     bool fast_ = false;
     bool then_queued_ = false;              // SetThenQueued
+    std::atomic<std::uint64_t> kicks_asked_{0}, kicks_made_{0};   // QueuedFrames
     const std::pair<std::uint32_t, std::uint32_t>* last_target_ = nullptr;
     Key last_target_key_{};
     Key last_depth_{};

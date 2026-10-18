@@ -1746,6 +1746,17 @@ void Rescale(Bridge& b, u32 scale) {
 }
 
 bool g_present_on_render_thread = false;     // SetPresentOnRenderThread
+// PresentLag: frames between the EE's and the one being presented, summed,
+// the most, how many; fresh pictures presented.
+std::atomic<u64> g_lag_sum{0}, g_lag_most{0}, g_lag_count{0}, g_shown_fresh{0};
+void NotePresented(u64 frame, bool fresh) {
+    const u64 now = EeFrame(), lag = now > frame ? now - frame : 0;
+    g_lag_sum += lag;
+    ++g_lag_count;
+    u64 most = g_lag_most.load();
+    while (lag > most && !g_lag_most.compare_exchange_weak(most, lag)) {}
+    if (fresh) ++g_shown_fresh;
+}
 
 void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
     u32 fbp = 0, fbw = 0, psm = 0;
@@ -1774,6 +1785,7 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
                 const u32 k = r.Scale();
                 const auto present = [&](u32 width, u32 height) {
                     CountPresentedPicture(fresh);
+                    NotePresented(frame, fresh);
                     if (due_ns) shown->PresentImageAt(image, layout, width, height, due_ns);
                     else shown->PresentImage(image, layout, width, height);
                 };
@@ -1944,6 +1956,19 @@ bool StartGpuRenderer(std::string* error, GpuMode mode, bool show) {
 }
 
 bool GpuPrimary() { return g_bridge && g_bridge->primary; }
+
+std::string PresentLag() {
+    const u64 count = g_lag_count.exchange(0), sum = g_lag_sum.exchange(0), most = g_lag_most.exchange(0);
+    const u64 fresh = g_shown_fresh.exchange(0);
+    const u64 queued = g_bridge ? g_bridge->renderer->QueuedFrames() : 0;
+    if (!count && !queued) return "";
+    char text[200];
+    std::snprintf(text, sizeof text, ", presented %llu (%llu new pictures), the EE %.1f frames ahead (at most %llu), "
+                                     "%llu frames queued for the renderer",
+                  (unsigned long long)count, (unsigned long long)fresh, count ? double(sum) / double(count) : 0.0,
+                  (unsigned long long)most, (unsigned long long)queued);
+    return text;
+}
 
 void SetDateArea(const std::string& mode) {
     if (!g_bridge) return;

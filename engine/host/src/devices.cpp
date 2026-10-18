@@ -445,7 +445,7 @@ void FrameTimes(u64 frame) {
     const u64 gs_us = GsBusyMicroseconds();
     const Clock::time_point now = Clock::now();
     const double seconds = std::chrono::duration<double>(now - last).count();
-    char job_text[512] = "";
+    char job_text[1024] = "";
     if (seconds > 0)
         std::snprintf(job_text, sizeof job_text, "%s, GS thread busy %d%%",
                       worker_us != last_worker_us
@@ -468,6 +468,13 @@ void FrameTimes(u64 frame) {
     }
     last_join = join;
     last_behind = behind;
+#ifdef PS2HOST_VULKAN
+    {
+        const std::string lag = PresentLag();
+        const std::size_t used = std::strlen(job_text);
+        std::snprintf(job_text + used, sizeof job_text - used, "%s", lag.c_str());
+    }
+#endif
     last_full = full;
     static u64 last_gpu_us = 0;
     const u64 gpu_us = GpuBusyMicroseconds();
@@ -604,7 +611,11 @@ std::atomic<u32> g_field{0};
 
 u32 ShownField() { return g_field.load(std::memory_order_relaxed); }
 
+std::atomic<u64> g_ee_frame{0};
+u64 EeFrame() { return g_ee_frame.load(std::memory_order_relaxed); }
+
 void FrameDone(u64 frame) {
+    g_ee_frame.store(frame, std::memory_order_relaxed);
     g_field.store(u32(frame & 1), std::memory_order_relaxed);
     CodeFrame(frame);
     FrameTimes(frame);

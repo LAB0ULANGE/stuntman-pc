@@ -258,6 +258,12 @@ std::string SetRenderThread(const std::string& mode);
    in turn, the GS thread not waiting for it (the "present_on_render_thread"
    setting, on by default; --present-on-render-thread; with render_thread). */
 void SetPresentOnRenderThread(bool on);
+/* For --frame-times: since the last call, the pictures presented on the
+   renderer's thread, how many frames the EE was ahead of each, and the frames
+   queued for the renderer now. */
+std::string PresentLag();
+/* The frame (vertical blank) the EE is at. */
+u64 EeFrame();
 /* The renderer's queue (render_thread): "fast" - a draw's state, target and
    depth buffer only when they change, the "render_queue" setting's default
    - or "plain" (--render-queue). */
