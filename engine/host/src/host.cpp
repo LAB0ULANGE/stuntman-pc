@@ -683,6 +683,7 @@ int Run(const Options& options) {
     InstallDevices();
     InstallIopServers();
     if (!options.gs_inline) StartGsThread();
+    std::fprintf(stderr, "%s\n", SettingsReport().c_str());
     lifted::Context c = NewContext();
     timeline::NameThread("EE");
     Watchdog watchdog(options.timeout_seconds);

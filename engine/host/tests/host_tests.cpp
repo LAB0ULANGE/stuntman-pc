@@ -2124,6 +2124,27 @@ void PlaySettingsRecordVuPrograms() {
           "vu_record=on: the microprograms recorded beside the settings, interpreted meanwhile");
 }
 
+// The settings a run takes, said at its start (SettingsReport): those the
+// file gives that differ from their defaults, one no code has asked for yet
+// marked so - and that none were read, when no file was looked for.
+void SettingsReportSaysWhatDiffers() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps2host_tests_report";
+    std::filesystem::create_directories(dir);
+    {
+        std::ofstream out(dir / "pc_settings.ini");
+        out << "same=on\nchanged=off\nunasked=3\n";
+    }
+    ps2host::LoadSettings((dir / "pc_settings.ini").string());
+    ps2host::Setting("same", "on");
+    ps2host::Setting("changed", "on");
+    const std::string report = ps2host::SettingsReport();
+    ps2host::LoadSettings("");
+    std::filesystem::remove_all(dir);
+    Check(report.find("changed=off (default on)") != std::string::npos &&
+              report.find("unasked=3 (not read yet)") != std::string::npos && report.find("same=") == std::string::npos,
+          "the settings report: what differs from the defaults, and what no code read yet");
+}
+
 // cdvdman's sceCdSearchFile: a file's place on the disc, its name as a module
 // writes it - a device before it, any case, ";1" or not - into sceCdlFILE.
 void IopSearchesTheDisc() {
@@ -2488,6 +2509,7 @@ int main() {
     IopPoolsAndLibraryCalls();
     IopSearchesTheDisc();
     PlaySettingsRecordVuPrograms();
+    SettingsReportSaysWhatDiffers();
     PictureRateCountsGamePictures();
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();

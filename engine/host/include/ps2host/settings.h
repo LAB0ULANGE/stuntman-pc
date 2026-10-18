@@ -25,6 +25,10 @@ bool SettingOn(const std::string& key, bool fallback = false);
 /* Sets one and writes the file. */
 void SetSetting(const std::string& key, const std::string& value);
 void SetSettingOn(const std::string& key, bool on);
+/* The settings the file gives that differ from their defaults (each as
+   Setting was first asked for it; "not read yet" for one no code has asked
+   for so far), or that none were read: a line for the console. */
+std::string SettingsReport();
 
 /* The run options the settings add when the port is played (started with no
    arguments, main.cpp). vu_record=on: the vector units' microprograms the
