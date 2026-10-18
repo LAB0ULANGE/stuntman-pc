@@ -550,7 +550,7 @@ u32 VblankPeriodUs();
    refresh it divides evenly, not above the desktop's (the "fullscreen_refresh"
    setting: match, the default, or desktop). */
 void SetWindowGameRate(int hz);
-constexpr double kSteerTarget = 4.0;
+constexpr double kSteerTarget = 5.0;
 /* The rate to play at for `level` frames queued, aiming at `target`, of `capacity`. */
 double SteerRatio(double level, double target, double capacity);
 /* Batches of stereo frames resampled at a ratio (input frames per output

@@ -35,7 +35,7 @@ namespace ps2host {
 
 namespace {
 
-constexpr int kBuffers = 8;
+constexpr int kBuffers = 12;
 constexpr DWORD kFrames = 1024;                 // 21 ms at 48 kHz
 
 struct Device {
