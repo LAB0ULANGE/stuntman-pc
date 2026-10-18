@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "ps2host/run.h"
+#include <cmath>
 
 #pragma comment(lib, "winmm.lib")
 
@@ -45,6 +46,9 @@ struct Device {
     DWORD filled = 0;                           // frames in it
     unsigned long long dropped = 0;
     bool mute = false;                          // PS2HOST_AUDIO_MUTE: silence played
+    bool steer = false;                         // SetAudioSteer
+    AudioSteer steering;
+    std::vector<short> stretched;
     std::FILE* wav = nullptr;
     unsigned long long wav_frames = 0;
 
@@ -88,6 +92,37 @@ Device& D() {
 }  // namespace
 
 void CloseAudio() { D().Close(); }
+
+void SetAudioSteer(bool on) { D().steer = on; }
+
+double SteerRatio(double level, double target, double capacity) {
+    // Faster (above 1) the fuller, up to 1% when half the queue past the target.
+    const double r = 1.0 + 0.02 * (level - target) / capacity;
+    return std::min(1.01, std::max(0.99, r));
+}
+
+void AudioSteer::Stretch(const short* frames, unsigned count, double ratio, std::vector<short>* out) {
+    // Linear interpolation between consecutive frames, `ratio` input frames to
+    // an output frame, the position kept across batches (no seam between them).
+    out->clear();
+    if (!count) return;
+    auto at = [&](long long i, int ch) -> double {
+        return i < 0 ? double(last_[ch]) : double(frames[std::size_t(i) * 2 + ch]);
+    };
+    // position_ is from the last frame of the batch before (index -1).
+    while (position_ < double(count) - 1.0) {
+        const long long i = (long long)std::floor(position_);
+        const double f = position_ - double(i);
+        for (int ch = 0; ch < 2; ++ch) {
+            const double v = at(i, ch) + (at(i + 1, ch) - at(i, ch)) * f;
+            out->push_back(short(std::lround(std::min(32767.0, std::max(-32768.0, v)))));
+        }
+        position_ += ratio;
+    }
+    position_ -= double(count);
+    last_[0] = frames[std::size_t(count - 1) * 2];
+    last_[1] = frames[std::size_t(count - 1) * 2 + 1];
+}
 
 bool OpenAudio() {
     Device& d = D();
@@ -148,6 +183,7 @@ struct AudioLog {
     unsigned ran_out = 0;
     unsigned long long dropped_before = 0;
     int fewest_queued = 99;
+    unsigned long long frames = 0, queued_sum = 0;   // made; buffers queued, summed over batches
 };
 AudioLog& Log() {
     static AudioLog log;
@@ -161,7 +197,7 @@ int Queued(Device& d) {
     return n;
 }
 
-void NoteBatch(Device& d) {
+void NoteBatch(Device& d, unsigned count) {
     AudioLog& l = Log();
     const auto now = std::chrono::steady_clock::now();
     if (l.last.time_since_epoch().count()) {
@@ -175,12 +211,19 @@ void NoteBatch(Device& d) {
     }
     l.last = now;
     ++l.batches;
-    if (d.out) l.fewest_queued = std::min(l.fewest_queued, Queued(d));
+    l.frames += count;
+    if (d.out) {
+        l.fewest_queued = std::min(l.fewest_queued, Queued(d));
+        l.queued_sum += unsigned(Queued(d));
+    }
     if (now - l.since >= std::chrono::seconds(2)) {
         std::fprintf(stderr, "[audio] %u batches, longest wait %.1f ms (%u past 10 ms, %u past 20, %u past 40); "
-                             "device: ran out %u times, %llu samples dropped, fewest queued %d\n",
+                             "device: ran out %u times, %llu samples dropped, fewest queued %d, %.1f on average; "
+                             "%.0f samples a second made\n",
                      l.batches, l.longest_ms, l.over10, l.over20, l.over40, l.ran_out,
-                     d.dropped - l.dropped_before, l.fewest_queued);
+                     d.dropped - l.dropped_before, l.fewest_queued,
+                     l.batches ? double(l.queued_sum) / l.batches : 0.0,
+                     double(l.frames) / std::chrono::duration<double>(now - l.since).count());
         l = AudioLog{};
         l.last = now;
         l.since = now;
@@ -190,7 +233,18 @@ void NoteBatch(Device& d) {
 
 void AudioFrames(const short* frames, unsigned count) {
     Device& d = D();
-    if (Log().on) NoteBatch(d);
+    if (Log().on) NoteBatch(d, count);
+    // Steered (audio_steer): played a touch faster or slower so that what
+    // is queued stays near kSteerTarget - made and played at the same rate,
+    // the queue stayed wherever a burst had left it: nearly full, ~150 ms
+    // behind, and each burst past it dropped (a crackle).
+    if (d.out && d.steer && !d.wav) {
+        const double level = double(Queued(d)) * kFrames + d.filled;
+        const double ratio = SteerRatio(level, kSteerTarget * double(kFrames), double(kBuffers) * kFrames);
+        d.steering.Stretch(frames, count, ratio, &d.stretched);
+        frames = d.stretched.data();
+        count = unsigned(d.stretched.size() / 2);
+    }
     if (d.wav) {
         std::fwrite(frames, 4, count, d.wav);
         d.wav_frames += count;

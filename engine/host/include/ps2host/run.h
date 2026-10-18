@@ -523,6 +523,22 @@ void ClearIntcStat(u32 bits);
 /* Sound (audio.cpp): opened with --audio; the SPU2 hands it 16-bit stereo
    frames at 48 kHz. */
 bool OpenAudio();
+/* The sound played a touch faster or slower (1% at most) so that what is
+   queued for the device stays near kSteerTarget buffers ("audio_steer"
+   setting, off by default; --audio-steer). */
+void SetAudioSteer(bool on);
+constexpr double kSteerTarget = 4.0;
+/* The rate to play at for `level` frames queued, aiming at `target`, of `capacity`. */
+double SteerRatio(double level, double target, double capacity);
+/* Batches of stereo frames resampled at a ratio (input frames per output
+   frame), linearly, seamless from one batch to the next. */
+class AudioSteer {
+public:
+    void Stretch(const short* frames, unsigned count, double ratio, std::vector<short>* out);
+private:
+    double position_ = 0.0;     // the next output's position, from the last batch's last frame (-1)
+    short last_[2] = {0, 0};
+};
 /* Stops the sound and finishes the WAV recording (--audio-wav), before the
    process ends. */
 void CloseAudio();

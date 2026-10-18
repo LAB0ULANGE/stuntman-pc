@@ -105,7 +105,8 @@ void KernelSyscall(lifted::Context& c) {
                   SyscallName(service), unsigned(number), Arg(c, 0), Arg(c, 1), Arg(c, 2),
                   Arg(c, 3));
     if (Tracing()) std::fprintf(stderr, "[%s]\n", text);
-    else Note("syscall " + std::to_string(service), text);
+    // (SetGsCrt: each video mode asked for - NTSC, PAL - noted, not only the first)
+    else Note("syscall " + std::to_string(service) + (number == 0x02 ? " " + std::to_string(Arg(c, 1)) : ""), text);
     Kernel& k = K();
     // A service the program installed itself (SetSyscall) runs its own handler,
     // in kernel mode on the console - here, as any other guest function.

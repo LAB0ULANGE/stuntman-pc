@@ -136,6 +136,8 @@ struct Options {
     std::string date_area;
     /* --date-in-pass off|on|check: else the "date_in_pass" setting's, on (SetDateInPass). */
     std::string date_in_pass;
+    /* --audio-steer on|off: else the "audio_steer" setting's, off (SetAudioSteer). */
+    std::string audio_steer;
     /* --render-queue fast|plain: else the "render_queue" setting's, fast (SetRenderQueue). */
     std::string render_queue;
     /* --present-on-render-thread on|off: else the "present_on_render_thread" setting's, on. */

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1913,6 +1914,38 @@ void GsThreadWakesForEveryPacket() {
 
 // show_fps: the game's pictures and the blanks, a line a second - one new
 // picture every sixth blank at 38 blanks a second is about 6 images/s.
+// The sound steered (audio_steer): faster above the target fill, slower
+// below, 1% at most; resampled seamlessly across batches - a sine wave cut
+// into batches of any size comes out with no jump, at the rate asked.
+void AudioIsSteeredSeamlessly() {
+    const double cap = 8 * 1024.0, target = 4 * 1024.0;
+    Check(ps2host::SteerRatio(target, target, cap) == 1.0 && ps2host::SteerRatio(cap, target, cap) > 1.0 &&
+              ps2host::SteerRatio(0, target, cap) < 1.0 && ps2host::SteerRatio(cap * 10, target, cap) <= 1.01 &&
+              ps2host::SteerRatio(-cap * 10, target, cap) >= 0.99,
+          "audio steering: faster when fuller than the target, slower when emptier, 1% at most");
+    for (const double ratio : {1.0, 1.008, 0.992}) {
+        ps2host::AudioSteer steer;
+        std::vector<short> in, out, part;
+        for (int i = 0; i < 48000; ++i) {
+            const short v = short(std::lround(10000.0 * std::sin(i * 0.05)));
+            in.push_back(v);
+            in.push_back(short(-v));
+        }
+        std::size_t at = 0, size = 37;
+        while (at < in.size() / 2) {
+            const std::size_t n = std::min(size, in.size() / 2 - at);
+            steer.Stretch(in.data() + at * 2, unsigned(n), ratio, &part);
+            out.insert(out.end(), part.begin(), part.end());
+            at += n;
+            size = size * 7 % 113 + 1;              // batches of every sort of size
+        }
+        bool smooth = true;                         // a step of the sine is at most ~500
+        for (std::size_t i = 2; i < out.size(); i += 2) smooth = smooth && std::abs(out[i] - out[i - 2]) < 600;
+        const double made = double(out.size() / 2), expected = 48000.0 / ratio;
+        Check(smooth && std::fabs(made - expected) < 3, "audio steering: seamless across batches, at the rate asked");
+    }
+}
+
 void PictureRateCountsGamePictures() {
     ps2host::PictureRate rate;
     std::string line;
@@ -2521,6 +2554,7 @@ int main() {
     PlaySettingsRecordVuPrograms();
     SettingsReportSaysWhatDiffers();
     PictureRateCountsGamePictures();
+    AudioIsSteeredSeamlessly();
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();
     GpuBridgeKeepsMemoryAsTheGs();                  // near the end: it puts the GPU in the GS's stead

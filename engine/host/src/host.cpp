@@ -672,6 +672,7 @@ int Run(const Options& options) {
     bool sound = false;
     if (options.audio) {
         sound = OpenAudio();
+        SetAudioSteer((!options.audio_steer.empty() ? options.audio_steer : Setting("audio_steer", "off")) == "on");
         if (!sound) std::fprintf(stderr, "no sound device: running silent\n");
     }
     if (!options.audio_wav.empty()) {
@@ -790,6 +791,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--render-thread" && i + 1 < argc) options.render_thread = argv[++i];
         else if (arg == "--present-on-render-thread" && i + 1 < argc) options.present_on_render_thread = argv[++i];
         else if (arg == "--render-queue" && i + 1 < argc) options.render_queue = argv[++i];
+        else if (arg == "--audio-steer" && i + 1 < argc) options.audio_steer = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;
