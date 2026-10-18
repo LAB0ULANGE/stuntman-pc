@@ -57,13 +57,21 @@ public:
     /* How evenly pictures went to the screen since the last call (--frame-times):
        presents, and the time between them - mean, standard deviation and
        longest, in milliseconds. */
-    struct Pacing { std::uint64_t presents = 0; double mean_ms = 0, jitter_ms = 0, longest_ms = 0; };
+    struct Pacing {
+        std::uint64_t presents = 0;
+        double mean_ms = 0, jitter_ms = 0, longest_ms = 0;
+        std::uint64_t skipped = 0;      // PresentImageAt's pictures not copied: no copy free (SetPresentWait)
+    };
     virtual Pacing TakePacing() { return {}; }
 
     /* Vertical sync: each picture waits for the screen's refresh (no
        tearing, FIFO), or goes at once (IMMEDIATE, or MAILBOX where that is
        all there is). */
     virtual void SetVsync(bool on) { (void)on; }
+    /* PresentImageAt with every copy of its pictures still to be done by
+       the GPU: waits for one (true, as before) or skips the picture (false:
+       the drawing thread goes on; the picture shown stays till the next). */
+    virtual void SetPresentWait(bool wait) { (void)wait; }
     virtual bool Vsync() const { return false; }
 
     /* The window's height in the screen's pixels (0 when not known). */
@@ -149,6 +157,13 @@ public:
 /* A window with a Vulkan swapchain; null, with `error` saying why, when there is
    no Vulkan device or window to be had. */
 std::unique_ptr<Display> CreateVulkanDisplay(const char* title, int width, int height, std::string* error);
+
+/* Which of `count` paced pictures (PresentImageAt's copies) a new picture
+   goes into: one neither waiting to be shown (`waiting`, oldest first) nor
+   being shown (`shown`, -1 for none), else the oldest waiting - its turn
+   lost (*lost). With `copied` (whether each one's last copy is done), only
+   one whose copy is: -1 when none is. */
+int ChoosePaced(int count, int shown, const std::vector<int>& waiting, const bool* copied, bool* lost);
 
 }  // namespace ps2gpu
 

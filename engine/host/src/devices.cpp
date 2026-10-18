@@ -485,6 +485,11 @@ void FrameTimes(u64 frame) {
             std::snprintf(job_text + used, sizeof job_text - used,
                           ", presents %.1f/s every %.2f ms (jitter %.2f, longest %.1f)", double(p.presents) / seconds,
                           p.mean_ms, p.jitter_ms, p.longest_ms);
+            if (p.skipped) {
+                const std::size_t more = std::strlen(job_text);
+                std::snprintf(job_text + more, sizeof job_text - more, ", %llu skipped (the GPU behind)",
+                              (unsigned long long)p.skipped);
+            }
         }
     }
 #endif

@@ -174,6 +174,9 @@ bool OpenWindow(const wchar_t* title, int width, int height) {
             else timeline::Presented(due_ns, shown_ns);
         });
         if (SettingOn("vsync")) g_display->SetVsync(true);
+        // present_no_wait: a picture whose copy would wait for the GPU
+        // skipped, not waited for on the GS thread.
+        g_display->SetPresentWait(Setting("present_no_wait", "off") != "on");
         g_display->SetAspect(SettingAspect());
         return true;
     }

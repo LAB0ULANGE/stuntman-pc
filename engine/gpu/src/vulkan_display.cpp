@@ -51,6 +51,7 @@ public:
     void SetFullscreen(bool on) override;
     bool Fullscreen() const override;
     void SetVsync(bool on) override;
+    void SetPresentWait(bool wait) override { present_wait_ = wait; }
     bool TakeCapture() override {
         const bool asked = capture_;
         capture_ = false;
@@ -205,6 +206,8 @@ private:
     VkFence fence_ = VK_NULL_HANDLE;
     VkPresentModeKHR mode_ = VK_PRESENT_MODE_FIFO_KHR;
     std::atomic<bool> vsync_{false};        // FIFO when set (SetVsync)
+    std::atomic<bool> present_wait_{true};  // SetPresentWait
+    std::atomic<std::uint64_t> skipped_{0}; // ...the pictures skipped since TakePacing
 
     VkBuffer staging_ = VK_NULL_HANDLE;
     VkDeviceMemory staging_memory_ = VK_NULL_HANDLE;
@@ -797,14 +800,25 @@ bool VulkanDisplay::PresentImageAt(std::uint64_t image, int layout, std::uint32_
     // picture keeps no more than two frames behind). What the GPU still
     // reads of it (an earlier present's blit, submitted before) goes first,
     // by the queue's order and the copy's barrier.
+    // Not waited for (SetPresentWait false): only one whose last copy the
+    // GPU has done - the copies queue behind the drawing, and waiting held
+    // the drawing thread (the GS's) ~5 ms a picture in Stuntman's stunt.
+    bool copied[kPaced];
+    const bool wait = present_wait_.load();
+    if (!wait)
+        for (int i = 0; i < kPaced; ++i) copied[i] = vkGetFenceStatus(device_, paced_[i].copied) == VK_SUCCESS;
     int slot = -1;
     {
         std::lock_guard<std::mutex> hold(paced_lock_);
-        for (int i = 0; i < kPaced && slot < 0; ++i)
-            if (i != taken_ && std::find(ready_.begin(), ready_.end(), i) == ready_.end()) slot = i;
+        const std::vector<int> waiting(ready_.begin(), ready_.end());
+        bool lost = false;
+        slot = ChoosePaced(kPaced, taken_, waiting, wait ? nullptr : copied, &lost);
         if (slot < 0) {
-            slot = ready_.front();
-            ready_.pop_front();
+            ++skipped_;
+            return !closed_;
+        }
+        if (lost) {
+            ready_.erase(std::find(ready_.begin(), ready_.end(), slot));
             if (observer_) observer_(paced_[slot].due_ns, 0, true);     // its turn lost
         }
     }
@@ -998,6 +1012,7 @@ Display::Pacing VulkanDisplay::TakePacing() {
     }
     presents_ = 0;
     interval_sum_ = interval_squares_ = interval_longest_ = 0;
+    p.skipped = skipped_.exchange(0);
     return p;
 }
 
@@ -1296,6 +1311,19 @@ std::unique_ptr<Display> CreateVulkanDisplay(const char* title, int width, int h
         return nullptr;
     }
     return display;
+}
+
+int ChoosePaced(int count, int shown, const std::vector<int>& waiting, const bool* copied, bool* lost) {
+    *lost = false;
+    for (int i = 0; i < count; ++i)
+        if (i != shown && std::find(waiting.begin(), waiting.end(), i) == waiting.end() && (!copied || copied[i]))
+            return i;
+    for (int i : waiting)
+        if (!copied || copied[i]) {
+            *lost = true;
+            return i;
+        }
+    return -1;
 }
 
 }  // namespace ps2gpu

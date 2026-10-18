@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "ps2gpu/display.h"
 #include "ps2gpu/gs_renderer.h"
 
 namespace {
@@ -412,7 +413,27 @@ void Fogged(ps2gpu::GsRenderer& renderer) {
 
 }  // namespace
 
+// PresentImageAt's choice of copy (ChoosePaced): free ones first, else the
+// oldest waiting (its turn lost); not waiting for the GPU, only those whose
+// copy is done - none such, none at all.
+void PacedPicturesChosen() {
+    bool lost = false;
+    const bool all[3] = {true, true, true};
+    Check(ps2gpu::ChoosePaced(3, -1, {}, nullptr, &lost) == 0 && !lost, "paced: the first free picture");
+    Check(ps2gpu::ChoosePaced(3, 0, {1}, nullptr, &lost) == 2 && !lost, "paced: not the one shown, nor one waiting");
+    Check(ps2gpu::ChoosePaced(3, 0, {2, 1}, nullptr, &lost) == 2 && lost, "paced: all taken, the oldest waiting");
+    Check(ps2gpu::ChoosePaced(3, 0, {2, 1}, all, &lost) == 2 && lost, "paced: the same with every copy done");
+    const bool second[3] = {false, true, true};
+    Check(ps2gpu::ChoosePaced(3, -1, {}, second, &lost) == 1 && !lost, "paced: a free picture whose copy is done");
+    const bool shown_only[3] = {false, false, true};
+    Check(ps2gpu::ChoosePaced(3, 2, {}, shown_only, &lost) == -1, "paced: no copy done but the shown one's: none");
+    const bool first[3] = {true, false, false};
+    Check(ps2gpu::ChoosePaced(3, 2, {1, 0}, first, &lost) == 0 && lost,
+          "paced: a waiting one whose copy is done, not the older one whose is not");
+}
+
 int main() {
+    PacedPicturesChosen();
     std::string error;
     auto gpu = ps2gpu::CreateGpu(&error);
     if (!gpu) {
