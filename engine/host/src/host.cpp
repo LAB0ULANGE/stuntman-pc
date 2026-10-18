@@ -590,7 +590,7 @@ int Run(const Options& options) {
     GuestMemory().WatchReads(options.watch_reads);
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
-    SetPalTiming((!options.pal_timing.empty() ? options.pal_timing : Setting("pal_timing", "off")) == "on");
+    SetPalTiming((!options.pal_timing.empty() ? options.pal_timing : Setting("pal_timing", "on")) == "on");
     SetVif1StcNoWait((!options.vif1_stc_no_wait.empty() ? options.vif1_stc_no_wait
                                                           : Setting("vif1_stc_no_wait", "on")) == "on");
     // A check: the worker in virtual time too, the run otherwise the same.
@@ -673,7 +673,7 @@ int Run(const Options& options) {
     bool sound = false;
     if (options.audio) {
         sound = OpenAudio();
-        SetAudioSteer((!options.audio_steer.empty() ? options.audio_steer : Setting("audio_steer", "off")) == "on");
+        SetAudioSteer((!options.audio_steer.empty() ? options.audio_steer : Setting("audio_steer", "on")) == "on");
         if (!sound) std::fprintf(stderr, "no sound device: running silent\n");
     }
     if (!options.audio_wav.empty()) {

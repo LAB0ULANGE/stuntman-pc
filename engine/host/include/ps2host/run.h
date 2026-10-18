@@ -525,11 +525,11 @@ void ClearIntcStat(u32 bits);
 bool OpenAudio();
 /* The sound played a touch faster or slower (1% at most) so that what is
    queued for the device stays near kSteerTarget buffers ("audio_steer"
-   setting, off by default; --audio-steer). */
+   setting, on by default; --audio-steer). */
 void SetAudioSteer(bool on);
 /* Real time's vertical blanks at 50 Hz when the game sets up PAL (SetGsCrt
    mode 3; VideoModeAsked), not NTSC's 59.94 always (the "pal_timing" setting,
-   off by default; --pal-timing). A virtual-time run keeps 59.94. */
+   on by default; --pal-timing). A virtual-time run keeps 59.94. */
 void SetPalTiming(bool on);
 void VideoModeAsked(u32 mode);
 u32 VblankPeriodUs();
