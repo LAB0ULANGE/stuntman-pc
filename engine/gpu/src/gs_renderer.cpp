@@ -29,6 +29,8 @@
 #include "gs_frag_blend.h"
 #include "gs_vert.h"
 #include "date_frag.h"
+#include "date_local_frag.h"
+#include "date_check_frag.h"
 #include "date_vert.h"
 #include "swizzle_comp.h"
 #include "swizzle_image_comp.h"
@@ -85,6 +87,7 @@ struct Image {
     VkDescriptorSet storage = VK_NULL_HANDLE;   /* a target as the swizzle's storage image */
     VkImageView depth_view = VK_NULL_HANDLE;    /* a depth buffer's depth alone, to sample */
     VkDescriptorSet depth_sampled = VK_NULL_HANDLE;     /* ...for the swizzle */
+    VkDescriptorSet input = VK_NULL_HANDLE;     /* a target read in its own pass (date_local.frag) */
 };
 
 // Depth with stencil: the stencil carries the destination alpha test.
@@ -416,6 +419,7 @@ public:
         Flush();
         g_.Flush();
         ++frame_;
+        if (date_in_pass_ == 2) ReportDateCheck(frame_ % 600 == 0);
         EvictReplacements();
     }
     void TargetRowsFromMemory(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint32_t width,
@@ -460,6 +464,8 @@ public:
     void SetExactOverlap(bool exact) override { exact_overlap_ = exact; }
     void SetPreparedAxes(bool on) override { prepared_axes_ = on; }
     void SetDateArea(bool batch) override { date_batch_area_ = batch; }
+    int SetDateInPass(int mode) override;
+    bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ) override;
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                     std::uint32_t* width, std::uint32_t* height) override;
     bool ReadWoven(std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) override {
@@ -500,6 +506,33 @@ private:
     /* Over `area` (the image's pixels): the stencil is read nowhere else. */
     void DateSetup(VkCommandBuffer cmd, Image& target, Image& depth, std::uint32_t datm, const VkRect2D& area);
     bool date_batch_area_ = true;   /* SetDateArea */
+    /* SetDateInPass: 0 the setup a pass of its own, as above; 1 within the
+       draws' pass (the target read where it is drawn, after a barrier: no
+       pass ended, no image changing layout), the stencil the same; 2 the
+       same, then checked against the target before the batch draws. */
+    int date_in_pass_ = 0;
+    VkDescriptorSetLayout input_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool input_pool_ = VK_NULL_HANDLE;
+    VkPipelineLayout date_local_layout_ = VK_NULL_HANDLE;
+    VkPipeline date_local_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline check_pipeline_ = VK_NULL_HANDLE;
+    bool MakeDateInPass();
+    VkDescriptorSet InputSet(Image& target);
+    /* Within the open pass, over `area`: the stencil 0, then 1 where the alpha bit is DATM. */
+    void DateSetupInPass(VkCommandBuffer cmd, Image& target, std::uint32_t datm, const VkRect2D& area);
+    /* Mode 2, outside a pass: the pixels of `area` whose stencil is not what their alpha bit says. */
+    void DateCheck(VkCommandBuffer cmd, Image& target, Image& depth, std::uint32_t datm, const VkRect2D& area);
+    VkBuffer check_buffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory check_memory_ = VK_NULL_HANDLE;
+    void* check_mapped_ = nullptr;
+    VkDescriptorSet check_set_ = VK_NULL_HANDLE;
+    std::uint64_t checked_batches_ = 0;
+    std::uint32_t reported_differ_ = 0;
+    void ReportDateCheck(bool always);
+    /* The colour target's layout in the draws' pass: one the pass can read it in. */
+    VkImageLayout TargetLayout() const {
+        return date_in_pass_ ? VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
     /* A target's descriptor for sampling it. */
     VkDescriptorSet SampledSet(Image& image);
     /* Copies of the target being drawn, when it is also the texture: one a
@@ -1612,6 +1645,7 @@ void VulkanGsRenderer::SetScale(std::uint32_t scale) {
         if (image.sampled) vkFreeDescriptorSets(g_.device, pool_, 1, &image.sampled);
         if (image.storage) vkFreeDescriptorSets(g_.device, storage_pool_, 1, &image.storage);
         if (image.depth_sampled) vkFreeDescriptorSets(g_.device, pool_, 1, &image.depth_sampled);
+        if (image.input) vkFreeDescriptorSets(g_.device, input_pool_, 1, &image.input);
         DestroyImage(image);
     };
     for (auto& [key, t] : targets_) drop(t);
@@ -1822,6 +1856,277 @@ void VulkanGsRenderer::DateSetup(VkCommandBuffer cmd, Image& target, Image& dept
     vkCmdDraw(cmd, 3, 1, 0, 0);
     g_.Mark(cmd, kProfDate);
     vkCmdEndRendering(cmd);
+}
+
+bool VulkanGsRenderer::MakeDateInPass() {
+    if (date_local_pipeline_ && check_pipeline_ && check_set_) return true;
+    if (!g_.local_read) return false;
+    auto module = [&](const std::uint32_t* code, std::size_t bytes) {
+        VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        ci.codeSize = bytes;
+        ci.pCode = code;
+        VkShaderModule m = VK_NULL_HANDLE;
+        vkCreateShaderModule(g_.device, &ci, nullptr, &m);
+        return m;
+    };
+    if (!input_set_layout_) {
+        VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT,
+                                             nullptr};
+        VkDescriptorSetLayoutCreateInfo dli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        dli.bindingCount = 1;
+        dli.pBindings = &binding;
+        if (vkCreateDescriptorSetLayout(g_.device, &dli, nullptr, &input_set_layout_) != VK_SUCCESS) return false;
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1024};
+        VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        dpi.maxSets = 1024;
+        dpi.poolSizeCount = 1;
+        dpi.pPoolSizes = &size;
+        if (vkCreateDescriptorPool(g_.device, &dpi, nullptr, &input_pool_) != VK_SUCCESS) return false;
+        // The draws' push constant ranges: theirs stay as they were set.
+        VkPushConstantRange push[2] = {{VK_SHADER_STAGE_VERTEX_BIT, 0, 8},
+                                       {VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentOffset, sizeof(FragmentParams)}};
+        VkPipelineLayoutCreateInfo lci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        lci.setLayoutCount = 1;
+        lci.pSetLayouts = &input_set_layout_;
+        lci.pushConstantRangeCount = 2;
+        lci.pPushConstantRanges = push;
+        if (vkCreatePipelineLayout(g_.device, &lci, nullptr, &date_local_layout_) != VK_SUCCESS) return false;
+    }
+    VkShaderModule vert = module(spirv_date_vert, sizeof spirv_date_vert);
+    VkShaderModule local = module(spirv_date_local_frag, sizeof spirv_date_local_frag);
+    VkShaderModule check = module(spirv_date_check_frag, sizeof spirv_date_check_frag);
+    VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
+                                                 {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewport.viewportCount = 1;
+    viewport.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    const VkPipelineColorBlendAttachmentState none{};       // the target there, nothing written to it
+    const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rendering.depthAttachmentFormat = kDepthFormat;
+    rendering.stencilAttachmentFormat = kDepthFormat;
+    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    VkGraphicsPipelineCreateInfo pci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pci.pNext = &rendering;
+    pci.stageCount = 2;
+    pci.pStages = stages;
+    pci.pVertexInputState = &input;
+    pci.pInputAssemblyState = &assembly;
+    pci.pViewportState = &viewport;
+    pci.pRasterizationState = &raster;
+    pci.pMultisampleState = &multisample;
+    pci.pDepthStencilState = &depth;
+    pci.pColorBlendState = &blending;
+    pci.pDynamicState = &dynamic;
+    VkResult r = VK_SUCCESS;
+    if (!date_local_pipeline_) {
+        // In the draws' pass: its target and depth buffer, their depth state
+        // set as theirs is (DrawState); the stencil replaced by the reference.
+        stages[1].module = local;
+        depth.stencilTestEnable = VK_TRUE;
+        depth.front = {VK_STENCIL_OP_KEEP, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS, 0xFF, 0xFF, 0};
+        depth.back = depth.front;
+        blending.attachmentCount = 1;
+        blending.pAttachments = &none;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachmentFormats = &format;
+        const VkDynamicState states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                         VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+                                         VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
+                                         VK_DYNAMIC_STATE_STENCIL_REFERENCE};
+        dynamic.dynamicStateCount = 7;
+        dynamic.pDynamicStates = states;
+        pci.layout = date_local_layout_;
+        r = vkCreateGraphicsPipelines(g_.device, VK_NULL_HANDLE, 1, &pci, nullptr, &date_local_pipeline_);
+        if (r != VK_SUCCESS) date_local_pipeline_ = VK_NULL_HANDLE;
+    }
+    if (!check_pipeline_) {
+        // A pass of its own: drawn where the stencil is the reference.
+        stages[1].module = check;
+        depth.stencilTestEnable = VK_TRUE;
+        depth.front = {VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 0xFF, 0, 0};
+        depth.back = depth.front;
+        blending.attachmentCount = 0;
+        rendering.colorAttachmentCount = 0;
+        const VkDynamicState states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                         VK_DYNAMIC_STATE_STENCIL_REFERENCE};
+        dynamic.dynamicStateCount = 3;
+        dynamic.pDynamicStates = states;
+        pci.layout = layout_;
+        r = vkCreateGraphicsPipelines(g_.device, VK_NULL_HANDLE, 1, &pci, nullptr, &check_pipeline_);
+        if (r != VK_SUCCESS) check_pipeline_ = VK_NULL_HANDLE;
+    }
+    vkDestroyShaderModule(g_.device, vert, nullptr);
+    vkDestroyShaderModule(g_.device, local, nullptr);
+    vkDestroyShaderModule(g_.device, check, nullptr);
+    if (!check_buffer_ && Buffer(16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &check_buffer_, &check_memory_, &check_mapped_)) {
+        std::memset(check_mapped_, 0, 16);
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = pool_;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &clut_set_layout_;
+        if (vkAllocateDescriptorSets(g_.device, &ai, &check_set_) == VK_SUCCESS) {
+            const VkDescriptorBufferInfo info{check_buffer_, 0, VK_WHOLE_SIZE};
+            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = check_set_;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo = &info;
+            vkUpdateDescriptorSets(g_.device, 1, &write, 0, nullptr);
+        } else {
+            check_set_ = VK_NULL_HANDLE;
+        }
+    }
+    return date_local_pipeline_ && check_pipeline_ && check_set_;
+}
+
+int VulkanGsRenderer::SetDateInPass(int mode) {
+    if (mode != 0 && !MakeDateInPass()) mode = 0;
+    if (mode == date_in_pass_) return mode;
+    // The targets' layout in the draws' pass changes: none open across.
+    Flush();
+    g_.Submit();
+    date_in_pass_ = mode;
+    return mode;
+}
+
+VkDescriptorSet VulkanGsRenderer::InputSet(Image& target) {
+    if (target.input) return target.input;
+    if (!input_pool_) return VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = input_pool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &input_set_layout_;
+    if (vkAllocateDescriptorSets(g_.device, &ai, &target.input) != VK_SUCCESS) return target.input = VK_NULL_HANDLE;
+    VkDescriptorImageInfo info{VK_NULL_HANDLE, target.view, VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = target.input;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(g_.device, 1, &write, 0, nullptr);
+    return target.input;
+}
+
+void VulkanGsRenderer::DateSetupInPass(VkCommandBuffer cmd, Image& target, std::uint32_t datm, const VkRect2D& area) {
+    // What the pass has drawn, visible to the reads of the target where it is drawn.
+    VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    ++g_barriers;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_DEPENDENCY_BY_REGION_BIT, 1, &b, 0, nullptr, 0, nullptr);
+    DrawState& d = drawn_;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, date_local_pipeline_);
+    d.pipeline = date_local_pipeline_;
+    // Its layout's set 0 is not the draws': theirs bound again after.
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, date_local_layout_, 0, 1, &target.input, 0, nullptr);
+    d.sets[0] = d.sets[1] = VK_NULL_HANDLE;
+    d.size[0] = d.size[1] = -1;
+    if (d.depth_test != 0) vkCmdSetDepthTestEnable(cmd, VkBool32(d.depth_test = 0));
+    if (d.depth_write != 0) vkCmdSetDepthWriteEnable(cmd, VkBool32(d.depth_write = 0));
+    if (d.compare < 0) vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_ALWAYS), d.compare = 1;
+    if (d.stencil_test != 1) vkCmdSetStencilTestEnable(cmd, VkBool32(d.stencil_test = 1));
+    const VkViewport vp{0, 0, float(target.pw()), float(target.ph()), 0, 1};
+    if (std::memcmp(&vp, &d.viewport, sizeof vp) != 0) {
+        d.viewport = vp;
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+    }
+    if (std::memcmp(&area, &d.scissor, sizeof area) != 0) {
+        d.scissor = area;
+        vkCmdSetScissor(cmd, 0, 1, &area);
+    }
+    // 0 over the area (as the pass of its own clears it), then 1 where the bit is DATM.
+    for (const std::uint32_t value : {0u, 1u}) {
+        const std::uint32_t which = value ? datm : 2u;
+        vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, value);
+        vkCmdPushConstants(cmd, date_local_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentOffset, 4, &which);
+        ++g_draws;
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+    g_.Mark(cmd, kProfDate);
+}
+
+void VulkanGsRenderer::DateCheck(VkCommandBuffer cmd, Image& target, Image& depth, std::uint32_t datm,
+                                 const VkRect2D& area) {
+    if (!SampledSet(target) || !check_set_) return;
+    ++checked_batches_;
+    Transition(cmd, target, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    Transition(cmd, depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+               VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
+    // (the stencil written in the pass, visible to this one's tests)
+    MemoryBarrier(cmd);
+    VkRenderingAttachmentInfo z{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    z.imageView = depth.view;
+    z.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    z.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    z.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = area;
+    ri.layerCount = 1;
+    ri.pDepthAttachment = &z;
+    ri.pStencilAttachment = &z;
+    vkCmdBeginRendering(cmd, &ri);
+    drawn_ = DrawState{};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, check_pipeline_);
+    const VkDescriptorSet sets[2] = {target.sampled, check_set_};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, sets, 0, nullptr);
+    const VkViewport vp{0, 0, float(target.pw()), float(target.ph()), 0, 1};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &area);
+    // Stencil 1: the bit is DATM; 0: it is not; any other value: wrong anywhere.
+    const std::uint32_t values[4][2] = {{1, datm}, {0, datm ^ 1u}, {2, 2}, {3, 2}};
+    for (const auto& value : values) {
+        vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, value[0]);
+        vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, kFragmentOffset, 4, &value[1]);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+    g_.Mark(cmd, kProfDate);
+    vkCmdEndRendering(cmd);
+}
+
+bool VulkanGsRenderer::DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ) {
+    if (!check_mapped_) return false;
+    Flush();
+    g_.Record([&](VkCommandBuffer cmd) {
+        VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &b, 0,
+                             nullptr, 0, nullptr);
+    });
+    g_.Submit("DATE check");
+    if (batches) *batches = checked_batches_;
+    if (differ) *differ = static_cast<const volatile std::uint32_t*>(check_mapped_)[0];
+    return true;
+}
+
+void VulkanGsRenderer::ReportDateCheck(bool always) {
+    if (!check_mapped_) return;
+    const std::uint32_t differ = static_cast<const volatile std::uint32_t*>(check_mapped_)[0];
+    if (!always && differ == reported_differ_) return;
+    reported_differ_ = differ;
+    std::fprintf(stderr, "[ps2gpu] DATE within the pass checked: %llu batches, %u pixels differ (frame %llu)\n",
+                 (unsigned long long)checked_batches_, differ, (unsigned long long)frame_);
 }
 
 VkDescriptorSet VulkanGsRenderer::SetFor(Texture& texture, int sampler) {
@@ -2209,7 +2514,8 @@ Image* VulkanGsRenderer::TargetFor(const GsDrawState& state) {
     if (t.image) return &t;
     MakeImage(t, state.width, state.height,
               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                  (g_.local_read ? VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT : 0u),
               VK_FORMAT_R8G8B8A8_UNORM, ScaleOf(state.width));
     // Local memory starts as zeros.
     g_.Record([&](VkCommandBuffer cmd) {
@@ -2731,9 +3037,12 @@ void VulkanGsRenderer::Flush() {
         g_.RecordInPass([&](VkCommandBuffer cmd) {
             // Barriers and copies cannot go inside a rendering pass: a batch
             // needing one, or drawing elsewhere, ends the open pass first.
-            const bool outside = state_.date || copy_first ||
+            // DATE set up within the pass (date_in_pass_), where nothing else ends it.
+            const bool in_pass = state_.date && date_in_pass_ != 0 && InputSet(*t);
+            const bool outside = (state_.date && !in_pass) || copy_first ||
                                  (source && source->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (outside || open_target_ != t || open_depth_ != depth) EndPass(cmd);
+            if (CountingBreaks() && in_pass) ++g_breaks["(DATE set up within the pass)"];
             if (CountingBreaks()) {     // (measure: DATE setups whose stencil the last left as it is)
                 static Image* last_t = nullptr;
                 static std::uint32_t last_datm = 9;
@@ -2745,7 +3054,7 @@ void VulkanGsRenderer::Flush() {
                 if (state_.date && !alpha) { last_t = t; last_datm = state_.datm; }
                 else if (t == last_t && alpha) last_t = nullptr;
             }
-            if (state_.date) DateSetup(cmd, *t, *depth, state_.datm, date_area);
+            if (state_.date && !in_pass) DateSetup(cmd, *t, *depth, state_.datm, date_area);
             if (copy_first) {
                 ++g_feedback;
                 Transition(cmd, *t, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
@@ -2776,13 +3085,16 @@ void VulkanGsRenderer::Flush() {
                 Transition(cmd, *source, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
             }
-            if (!open_target_) {
-            Transition(cmd, *t, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
-                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            const auto open_pass = [&] {
+            if (open_target_) return;
+            Transition(cmd, *t, TargetLayout(),
+                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                           (date_in_pass_ ? VK_ACCESS_INPUT_ATTACHMENT_READ_BIT : 0u),
+                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                           (date_in_pass_ ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : 0u));
             VkRenderingAttachmentInfo colour{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
             colour.imageView = t->view;
-            colour.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colour.imageLayout = TargetLayout();
             colour.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
             colour.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             Transition(cmd, *depth, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -2804,6 +3116,20 @@ void VulkanGsRenderer::Flush() {
             vkCmdBeginRendering(cmd, &ri);
             open_target_ = t;
             open_depth_ = depth;
+            };
+            open_pass();
+            if (in_pass) {
+                if (drawn_.recording != g_.recording_id()) drawn_ = DrawState{g_.recording_id()};
+                // (within the pass's area: a target taller than its depth buffer)
+                VkRect2D area = date_area;
+                const int bottom = int(std::min(t->ph(), depth->ph()));
+                area.extent.height = std::uint32_t(std::max(0, std::min(int(area.offset.y + area.extent.height), bottom) - area.offset.y));
+                DateSetupInPass(cmd, *t, state_.datm, area);
+                if (date_in_pass_ == 2) {
+                    EndPass(cmd);
+                    DateCheck(cmd, *t, *depth, state_.datm, area);
+                    open_pass();
+                }
             }
             // ZTST: NEVER, ALWAYS, GEQUAL, GREATER - the larger Z is nearer.
             static const VkCompareOp kCompare[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS,
@@ -3057,6 +3383,14 @@ VulkanGsRenderer::~VulkanGsRenderer() {
         }
     for (auto& [key, pipeline] : pipelines_) vkDestroyPipeline(g_.device, pipeline, nullptr);
     if (date_pipeline_) vkDestroyPipeline(g_.device, date_pipeline_, nullptr);
+    if (date_in_pass_ == 2) ReportDateCheck(true);
+    for (VkPipeline p : {date_local_pipeline_, check_pipeline_})
+        if (p) vkDestroyPipeline(g_.device, p, nullptr);
+    if (date_local_layout_) vkDestroyPipelineLayout(g_.device, date_local_layout_, nullptr);
+    if (input_pool_) vkDestroyDescriptorPool(g_.device, input_pool_, nullptr);
+    if (input_set_layout_) vkDestroyDescriptorSetLayout(g_.device, input_set_layout_, nullptr);
+    if (check_buffer_) vkDestroyBuffer(g_.device, check_buffer_, nullptr);
+    if (check_memory_) vkFreeMemory(g_.device, check_memory_, nullptr);
     for (VkSampler s : samplers_)
         if (s) vkDestroySampler(g_.device, s, nullptr);
     if (pool_) vkDestroyDescriptorPool(g_.device, pool_, nullptr);

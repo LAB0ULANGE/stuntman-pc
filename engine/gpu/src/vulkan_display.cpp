@@ -363,7 +363,8 @@ bool VulkanDisplay::Init(const char* title, int width, int height) {
     qci.queueFamilyIndex = family_;
     qci.queueCount = 1;
     qci.pQueuePriorities = &priority;
-    const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME};
+    const bool local_read = HasLocalRead(gpu_);     // the renderer's DATE set up within its pass
     // What the GS renderer needs, for when it draws on this device
     // (SharedGpu): dynamic rendering, and dual-source blending if there is any.
     VkPhysicalDeviceFeatures supported;
@@ -377,11 +378,15 @@ bool VulkanDisplay::Init(const char* title, int width, int height) {
     features.features.logicOp = supported.logicOp;
     features.features.textureCompressionBC = supported.textureCompressionBC;     // texture packs' DDS
     features.pNext = &v13;
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR local{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    local.dynamicRenderingLocalRead = VK_TRUE;
+    if (local_read) v13.pNext = &local;
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = 1;
+    dci.enabledExtensionCount = local_read ? 2 : 1;
     dci.ppEnabledExtensionNames = device_extensions;
     if (!Check(vkCreateDevice(gpu_, &dci, nullptr, &device_), "vkCreateDevice")) return false;
     // Device functions stay the loader's: see gpu.cpp.

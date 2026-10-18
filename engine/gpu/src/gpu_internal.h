@@ -35,6 +35,24 @@ enum ProfileKind { kProfOther, kProfDraw, kProfSwizzle, kProfLinear, kProfMemory
 inline std::atomic<std::uint64_t> g_profile_ns[kProfKinds] = {};
 struct WaitReason { const char* why; std::uint64_t count; double seconds; };
 inline WaitReason g_waits[16] = {};
+/* Whether the device can read a target being drawn, in its own pass
+   (VK_KHR_dynamic_rendering_local_read, and its feature). */
+inline bool HasLocalRead(VkPhysicalDevice gpu) {
+    std::uint32_t n = 0;
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &n, nullptr);
+    std::vector<VkExtensionProperties> list(n);
+    vkEnumerateDeviceExtensionProperties(gpu, nullptr, &n, list.data());
+    bool found = false;
+    for (const VkExtensionProperties& e : list)
+        if (std::string(e.extensionName) == VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME) found = true;
+    if (!found) return false;
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR local{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.pNext = &local;
+    vkGetPhysicalDeviceFeatures2(gpu, &features);
+    return local.dynamicRenderingLocalRead == VK_TRUE;
+}
 inline void CountWait(const char* why, double seconds) {
     for (WaitReason& w : g_waits) {
         if (!w.why) w.why = why;
@@ -111,6 +129,7 @@ public:
     bool dual_source = false;       /* dualSrcBlend: the GS's blending */
     bool logic_op = false;          /* logicOp: FBMSK's partly masked channels */
     bool bc = false;                /* textureCompressionBC: texture packs' DDS uploaded as they are */
+    bool local_read = false;        /* dynamicRenderingLocalRead: DATE set up within the draws' pass */
     bool owns_device = true;
 
 private:

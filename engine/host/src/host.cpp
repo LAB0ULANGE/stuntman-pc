@@ -652,6 +652,7 @@ int Run(const Options& options) {
         SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
         SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
+        SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "off"));
     }
     bool sound = false;
     if (options.audio) {
@@ -765,6 +766,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--owned-index" && i + 1 < argc) options.owned_index = argv[++i];
         else if (arg == "--gs-whole-qwords" && i + 1 < argc) options.gs_whole_qwords = argv[++i];
         else if (arg == "--date-area" && i + 1 < argc) options.date_area = argv[++i];
+        else if (arg == "--date-in-pass" && i + 1 < argc) options.date_in_pass = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;

@@ -83,10 +83,19 @@ bool VulkanGpu::Init(std::string* error) {
     features.features.textureCompressionBC = supported.textureCompressionBC;     // texture packs' DDS
     bc = supported.textureCompressionBC == VK_TRUE;
     features.pNext = &v13;
+    // A target read within its own pass: DATE set up without ending it.
+    local_read = HasLocalRead(gpu);
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR local{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    local.dynamicRenderingLocalRead = VK_TRUE;
+    if (local_read) v13.pNext = &local;
+    const char* extensions[] = {VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME};
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
+    dci.enabledExtensionCount = local_read ? 1 : 0;
+    dci.ppEnabledExtensionNames = extensions;
     if ((r = vkCreateDevice(gpu, &dci, nullptr, &device)) != VK_SUCCESS) return fail("vkCreateDevice", r);
     // Device functions stay the loader's (volkLoadInstance): they dispatch by
     // handle, so the window's device and this one can live side by side. volk
@@ -152,6 +161,7 @@ bool VulkanGpu::InitShared(VkInstance shared_instance, VkPhysicalDevice shared_g
     vkGetPhysicalDeviceFeatures(shared_gpu, &supported);
     logic_op = supported.logicOp == VK_TRUE;
     bc = supported.textureCompressionBC == VK_TRUE;     // (the Display enables it too)
+    local_read = HasLocalRead(shared_gpu);              // (and this)
     describe_ = describe;
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;

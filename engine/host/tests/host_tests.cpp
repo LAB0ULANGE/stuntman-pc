@@ -1944,6 +1944,18 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         gs.WriteRegister(0x47, 1u << 14);                               // TEST: DATE
         sprite(32, 60, 120, 90, 0x7F6E5D4Cu ^ colour);
         gs.WriteRegister(0x47, 0);
+        // DATM 1, twice, the alpha bits changed between them in the same
+        // pass (set up within it, date_in_pass: what was drawn read where
+        // it is drawn), each DATE sprite writing the bit the next tests.
+        sprite(40, 100, 90, 127, 0x80112233u ^ colour);                // bit set
+        sprite(70, 100, 127, 127, 0x00445566u ^ colour);               // clear
+        gs.WriteRegister(0x47, 1u << 14 | 1u << 15);                    // TEST: DATE, DATM 1
+        sprite(50, 104, 120, 124, 0x7F8899AAu ^ colour);               // clears the bit where it draws
+        gs.WriteRegister(0x47, 0);
+        sprite(100, 110, 127, 127, 0x80000000u ^ colour);              // sets it again, in part
+        gs.WriteRegister(0x47, 1u << 14 | 1u << 15);
+        sprite(44, 102, 124, 126, 0x80C0C0C0u ^ colour);
+        gs.WriteRegister(0x47, 0);
         // Textured from rows 32-63 of the picture itself (a target read as a
         // texture), with the same registers each time: the first low, the
         // second over the texture's rows, the third reading what the second
@@ -1978,14 +1990,18 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         gs.Finish();
     };
     // The newer images in a list, the images indexed by page, the DATE setup
-    // over the batch; then the ways before (newer_list=off, owned_index=off,
-    // date_area=full).
+    // over the batch, within the draws' pass; then the ways before
+    // (newer_list=off, owned_index=off, date_area=full, date_in_pass=off);
+    // then within the pass checked (date_in_pass=check: no pixel differs).
     bool same = true;
-    for (int list = 1; list >= 0; --list) {
+    for (int way = 0; way < 3; ++way) {
+        const int list = way != 1;
         ps2host::SetNewerList(list != 0);
         ps2host::SetDateArea(list ? "batch" : "full");
         ps2host::SetOwnedIndex(list != 0);
-        const u32 fbp = list ? 0x10 : 0x30, colour = list ? 0 : 0x01010101u;
+        const std::string in_pass = ps2host::SetDateInPass(way == 0 ? "on" : way == 1 ? "off" : "check");
+        const u32 fbp = way == 0 ? 0x10 : way == 1 ? 0x30 : 0x50;
+        const u32 colour = way == 0 ? 0 : way == 1 ? 0x01010101u : 0x02020202u;
         auto soft = std::make_unique<Gs>();
         scene(*soft, fbp, colour);
         Gs& gpu = TheGs();
@@ -1994,9 +2010,18 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         gpu.on_memory(begin, end, false);                               // the CPU reads it
         same = same && std::memcmp(gpu.memory.data() + begin * 256, soft->memory.data() + begin * 256,
                                    (end - begin) * 256) == 0;
-        Check(same, list ? "GPU bridge: images at two widths over one memory, and DATE, read back as the GS has it"
-                         : "GPU bridge: the same, newer images looked for among all, DATE set up over the target");
+        Check(same, way == 0   ? "GPU bridge: images at two widths over one memory, and DATE, read back as the GS has it"
+                    : way == 1 ? "GPU bridge: the same, newer images looked for among all, DATE set up over the target"
+                               : "GPU bridge: the same, DATE set up within the pass and checked");
+        if (way == 2 && in_pass == "check") {
+            std::uint64_t batches = 0, differ = 1;
+            Check(ps2host::DateInPassCheck(&batches, &differ) && batches >= 3 && differ == 0,
+                  "GPU bridge: DATE set up within the pass, every pixel's stencil as a pass of its own sets it");
+        } else if (way != 1 && in_pass == "off") {
+            std::printf("  (DATE within the pass not tried: the GPU cannot)\n");
+        }
     }
+    ps2host::SetDateInPass("off");
     ps2host::SetDateArea("batch");
     ps2host::SetNewerList(true);
     ps2host::SetOwnedIndex(true);

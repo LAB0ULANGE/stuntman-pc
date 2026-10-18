@@ -1914,6 +1914,20 @@ void SetDateArea(const std::string& mode) {
     if (mode == "full") std::fprintf(stderr, "[gpu] DATE set up over the whole target\n");
 }
 
+std::string SetDateInPass(const std::string& mode) {
+    if (!g_bridge) return "off";
+    const int want = mode == "check" ? 2 : mode == "on" ? 1 : 0;
+    const int got = g_bridge->renderer->SetDateInPass(want);
+    if (want && !got)
+        std::fprintf(stderr, "[gpu] date_in_pass=%s: this GPU cannot (DATE set up in a pass of its own)\n", mode.c_str());
+    if (got == 2) std::fprintf(stderr, "[gpu] DATE set up within the draws' pass, checked against the targets\n");
+    return got == 2 ? "check" : got == 1 ? "on" : "off";
+}
+
+bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ) {
+    return g_bridge && g_bridge->renderer->DateInPassCheck(batches, differ);
+}
+
 void SetOwnedIndex(bool on) {
     if (!g_bridge) return;
     g_bridge->owned_index = on;

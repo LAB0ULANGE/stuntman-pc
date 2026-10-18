@@ -261,6 +261,23 @@ public:
     /* The destination alpha test's setup pass over the batch's rectangle
        (true, the default) or over the whole target. */
     virtual void SetDateArea(bool batch) { (void)batch; }
+    /* The destination alpha test's setup: 0 a pass of its own before each
+       batch that tests it; 1 within the draws' pass, the target read where
+       it is drawn (VK_KHR_dynamic_rendering_local_read) - the same stencil,
+       no pass ended; 2 the same, then checked against the target as a pass
+       of its own reads it (DateInPassCheck). Returns the mode taken: 0 where
+       the device cannot. */
+    virtual int SetDateInPass(int mode) {
+        (void)mode;
+        return 0;
+    }
+    /* Mode 2's findings so far: the DATE batches checked, and the pixels
+       whose stencil disagreed with their target's alpha. */
+    virtual bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ) {
+        (void)batches;
+        (void)differ;
+        return false;
+    }
     /* The GPU's CLUT as it stands, 256 entries (a check: the texture cache's). */
     virtual bool ReadClut(std::uint32_t* clut) {
         (void)clut;

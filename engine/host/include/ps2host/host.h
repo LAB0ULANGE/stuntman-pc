@@ -131,6 +131,8 @@ struct Options {
     std::string gs_whole_qwords;
     /* --date-area batch|full: else the "date_area" setting's, batch (SetDateArea). */
     std::string date_area;
+    /* --date-in-pass off|on|check: else the "date_in_pass" setting's, off (SetDateInPass). */
+    std::string date_in_pass;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
     bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */
     bool gpu = false;              /* draw on the GPU instead of the software GS (gpu_bridge.cpp) */
