@@ -1522,9 +1522,9 @@ void VulkanGsRenderer::MemoryRead(std::uint32_t begin, std::uint32_t end, std::u
 
 bool VulkanGsRenderer::TargetToMemory(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint32_t cols,
                                       std::uint32_t rows, std::uint32_t first_row) {
+    Flush();   // a target the batch being drawn makes is found too
     auto found = targets_.find(Key{fbp, fbw, psm});
     if (found == targets_.end()) return false;
-    Flush();
     Image& t = found->second;
     cols = std::min(cols, t.width);
     rows = std::min(rows, t.height);
@@ -1561,9 +1561,9 @@ void VulkanGsRenderer::TargetFromMemory(std::uint32_t fbp, std::uint32_t fbw, st
 bool VulkanGsRenderer::DepthToMemory(std::uint32_t zbp, std::uint32_t width, std::uint32_t height, std::uint32_t fbw,
                                      std::uint32_t zpsm, std::uint32_t cols, std::uint32_t rows,
                                      std::uint32_t first_row) {
+    Flush();   // a target the batch being drawn makes is found too
     auto found = depths_.find(Key{zbp, width, height});
     if (found == depths_.end()) return false;
-    Flush();
     Image& d = found->second;
     cols = std::min(cols, d.width);
     rows = std::min(rows, d.height);

@@ -362,6 +362,16 @@ void PartlyMaskedChannels(ps2gpu::GsRenderer& renderer) {
     Check(!pixels.empty() && pixels[0] == 0x80F8E030u, "a 16-bit target's FBMSK in RGBA32 bit positions");
 }
 
+// A target drawn into for the first time, its batch not yet ended, written
+// back to memory: found (TargetToMemory ends the batch first), so whether
+// it is does not hang on when the renderer ends its batches.
+void FreshTargetToMemory(ps2gpu::GsRenderer& renderer) {
+    const ps2gpu::GsDrawState state = Target(0x1E0);
+    Rect(renderer, state, 0, 0, 8, 8, 0x80102030u);
+    Check(renderer.TargetToMemory(0x1E0, 1, 0, 64, 64, 0), "a target drawn into, its batch open, goes to memory");
+    Check(!renderer.TargetToMemory(0x1F0, 1, 0, 64, 64, 0), "one never drawn into does not");
+}
+
 void TargetFromMemory(ps2gpu::GsRenderer& renderer) {
     std::vector<std::uint32_t> pixels(64 * 64);
     for (std::uint32_t i = 0; i < pixels.size(); ++i) pixels[i] = Rgba(std::uint8_t(i), std::uint8_t(i >> 6), 7, 0x80);
@@ -457,6 +467,7 @@ int main() {
     PerPixelBlending(*renderer);
     Addressed(*renderer);
     RenderToTexture(*renderer);
+    FreshTargetToMemory(*renderer);
     TargetFromMemory(*renderer);
     PartlyMaskedChannels(*renderer);
     if (g_failures) std::printf("gpu renderer tests: %d failed\n", g_failures);
