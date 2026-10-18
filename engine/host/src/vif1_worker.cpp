@@ -172,6 +172,18 @@ void Vif1WaitMicroseconds(u64* join, u64* frame, u64* full) {
     *full = g_full_us.load();
 }
 
+// The EE's wait for the worker: the IOP going on meanwhile (IopWhileEeWaits,
+// the lock let go while it runs), woken every millisecond to give it a turn.
+template <typename Done>
+void WaitDrained(Worker& w, std::unique_lock<std::mutex>& lock, Done done) {
+    while (!done()) {
+        if (w.drained.wait_for(lock, std::chrono::milliseconds(1), done)) return;
+        lock.unlock();
+        IopWhileEeWaits();
+        lock.lock();
+    }
+}
+
 void Vif1Run(std::function<void()> command) {
     if (!g_worker || t_on_worker) {
         command();
@@ -182,7 +194,7 @@ void Vif1Run(std::function<void()> command) {
     if (w.pending.load() >= kMaxQueued) {
         Timed timed(Section::GsWait);
         Waited waited{g_full_us};
-        w.drained.wait(lock, [&] { return w.pending.load() < kMaxQueued / 2; });
+        WaitDrained(w, lock, [&] { return w.pending.load() < kMaxQueued / 2; });
     }
     ++w.pending;
     w.queue.push_back(std::move(command));
@@ -205,7 +217,7 @@ void Vif1RunFrame(std::function<void()> command) {
         Timed timed(Section::GsWait);
         Waited waited{g_frame_wait_us};
         std::unique_lock<std::mutex> lock(w.mutex);
-        w.drained.wait(lock, [&] { return w.frames.load() < kFramesBehind; });
+        WaitDrained(w, lock, [&] { return w.frames.load() < kFramesBehind; });
     }
     ++w.frames;
     Vif1Run([&w, command = std::move(command)] {
@@ -245,7 +257,7 @@ void JoinVif1(const char* why, u32 address) {
         const auto began = std::chrono::steady_clock::now();
         {
             std::unique_lock<std::mutex> lock(w.mutex);
-            w.drained.wait(lock, [&] { return w.pending.load() == 0; });
+            WaitDrained(w, lock, [&] { return w.pending.load() == 0; });
         }
         const u64 us = u64(std::chrono::duration_cast<std::chrono::microseconds>(
                                std::chrono::steady_clock::now() - began).count());

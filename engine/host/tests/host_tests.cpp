@@ -1931,6 +1931,31 @@ void VblanksFollowTheVideoMode() {
     Check(pal == 20000 && ntsc == 16683 && off == 16683, "real time's blanks: PAL's 50 Hz when the game sets PAL up");
 }
 
+// iop::RunGaps: the real time the IOP stood still between two runs, long
+// ones counted (a sound stream's half-buffer lasts 64 ms); IopWhileEeWaits
+// runs it only on the EE's own thread (not this test's, not a worker's).
+void IopGapsAreMeasured() {
+    using namespace ps2host::iop;
+    Vm& vm = TheVm();
+    vm.threads[903].id = 903;                       // a dormant thread: Run has something to look at
+    vm.threads[903].ready = false;
+    vm.threads[903].wait = Wait::Dormant;
+    ps2host::iop::Run(1000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    ps2host::iop::Run(1000);
+    const std::string gaps = ps2host::iop::RunGaps();
+    ps2host::SetIopWhileWaiting(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const std::uint64_t before = ps2host::iop::NsSinceRun();
+    ps2host::IopWhileEeWaits();
+    const std::uint64_t after = ps2host::iop::NsSinceRun();
+    ps2host::SetIopWhileWaiting(false);
+    vm.threads.erase(903);
+    Check(gaps.find("1 over 50 ms") != std::string::npos && ps2host::iop::RunGaps().find("0 over 50 ms") != std::string::npos,
+          "the IOP's gaps: one over 50 ms counted, then the count starts again");
+    Check(after >= before && before >= 5'000'000, "the IOP run in the EE's waits only on the EE's thread");
+}
+
 void AudioIsSteeredSeamlessly() {
     const double cap = 8 * 1024.0, target = 4 * 1024.0;
     Check(ps2host::SteerRatio(target, target, cap) == 1.0 && ps2host::SteerRatio(cap, target, cap) > 1.0 &&
@@ -2598,6 +2623,7 @@ int main() {
     SettingsReportSaysWhatDiffers();
     PictureRateCountsGamePictures();
     AudioIsSteeredSeamlessly();
+    IopGapsAreMeasured();
     VblanksFollowTheVideoMode();
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();

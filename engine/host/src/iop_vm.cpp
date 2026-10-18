@@ -372,9 +372,51 @@ u32 Vm::Call(u32 function, std::vector<u32> args) {
 
 // ---------------------------------------------------------------- scheduling
 
+namespace {
+// RunGaps: real time between the IOP's runs (one's end, the next's start) - the longest, and how many were
+// long enough for a sound stream's half-buffer (64 ms: XAVSTRM's) to be
+// played again before its thread could fill it.
+u64 g_last_run_ns = 0, g_longest_gap_ns = 0, g_long_gaps = 0;
+bool g_running = false;
+}  // namespace
+
+std::string RunGaps() {
+    if (!g_last_run_ns) return "";
+    char text[96];
+    std::snprintf(text, sizeof text, ", IOP: longest gap %.0f ms, %llu over 50 ms", double(g_longest_gap_ns) / 1e6,
+                  (unsigned long long)g_long_gaps);
+    g_longest_gap_ns = 0;
+    g_long_gaps = 0;
+    return text;
+}
+
+u64 NsSinceRun() {
+    const u64 now = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+    return g_last_run_ns && now > g_last_run_ns ? now - g_last_run_ns : 0;
+}
+
+bool Running() { return g_running; }
+
 void Run(u64 slice) {
     Vm& vm = TheVm();
     if (vm.threads.empty() && vm.alarms.empty() && vm.completions.empty()) return;
+    {
+        const u64 now = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (g_last_run_ns && now > g_last_run_ns) {
+            g_longest_gap_ns = std::max(g_longest_gap_ns, now - g_last_run_ns);
+            if (now - g_last_run_ns > 50'000'000) ++g_long_gaps;
+        }
+    }
+    struct Busy {
+        Busy() { g_running = true; }
+        ~Busy() {
+            g_running = false;
+            g_last_run_ns = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+    } busy;
     const u64 start = vm.instructions;
     for (;;) {
         SoundInterrupts(vm);
@@ -610,7 +652,7 @@ void RpcCall(u32 server, u32 procedure, u32 size, u32 receive, u32 receive_size,
     if (vm.trace) {
         // The request as it sits in the server's buffer: words, and any text.
         std::string words, chars;
-        for (u32 i = 0; i < size && i < 64; i += 4) {
+        for (u32 i = 0; i < size && i < 4096; i += 4) {
             char w[12];
             std::snprintf(w, sizeof w, " %08X", unsigned(vm.Read(entry.buffer + i, 4)));
             words += w;

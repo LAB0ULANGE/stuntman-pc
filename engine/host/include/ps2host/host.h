@@ -138,6 +138,8 @@ struct Options {
     std::string date_area;
     /* --date-in-pass off|on|check: else the "date_in_pass" setting's, on (SetDateInPass). */
     std::string date_in_pass;
+    /* --iop-while-waiting on|off: else the "iop_while_waiting" setting's, on (SetIopWhileWaiting). */
+    std::string iop_while_waiting;
     /* --pal-timing on|off: else the "pal_timing" setting's, on (SetPalTiming). */
     std::string pal_timing;
     /* --audio-steer on|off: else the "audio_steer" setting's, on (SetAudioSteer). */

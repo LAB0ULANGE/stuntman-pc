@@ -436,6 +436,7 @@ void SleepUntil(std::chrono::steady_clock::time_point when) {
 // The real-time blanks' period (VideoModeAsked): NTSC's 59.94 Hz, or PAL's
 // 50 when the game sets PAL up and pal_timing is on.
 std::atomic<u32> g_vblank_us{16683};
+thread_local bool t_ee_thread = false;      // the thread the guest's fibers run on (RunThreads)
 std::atomic<bool> g_pal_timing{false};
 
 void VblankTimer() {
@@ -823,6 +824,7 @@ void RunThreads(const lifted::Context& initial, u32 entry, s64 loop_budget) {
     if (s.realtime) StartRealTimeThreads();
     s.next_vblank_ns = ClockNs() + kFrameNs;
     s.host_fiber = ConvertThreadToFiber(nullptr);
+    t_ee_thread = true;
     auto main = std::make_unique<Thread>();
     main->id = s.next_thread++;
     main->entry = entry;
@@ -1190,6 +1192,27 @@ void VideoModeAsked(u32 mode) {
         std::fprintf(stderr, "[host] vertical blanks every %u us (%s)\n", unsigned(us), us == 20000 ? "PAL" : "NTSC");
 }
 u32 VblankPeriodUs() { return g_vblank_us.load(); }
+
+namespace {
+std::atomic<bool> g_iop_while_waiting{false};
+}  // namespace
+
+void SetIopWhileWaiting(bool on) { g_iop_while_waiting = on; }
+
+void IopWhileEeWaits() {
+    // In real time, the EE waiting for the GS thread or the VIF1 worker (a
+    // frame's work queued, a join) let the IOP go on: run only at the
+    // interrupts and when every EE thread waits, it sat still meanwhile - up
+    // to 65 ms in a stunt, more than the 64 ms a sound stream's half-buffer
+    // lasts (XAVSTRM's music), played again before its thread could fill it.
+    // Virtual time keeps its order (the same in every run).
+    if (!t_ee_thread || !g_iop_while_waiting.load(std::memory_order_relaxed) || iop::Running()) return;
+    Scheduler& s = S();
+    if (!s.realtime || s.in_interrupt) return;
+    if (iop::NsSinceRun() < 2'000'000) return;
+    Timed timed(Section::Iop);
+    iop::Run(50'000);
+}
 
 void FastThread() {
     THREAD_POWER_THROTTLING_STATE throttling{};

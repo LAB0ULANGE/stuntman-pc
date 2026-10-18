@@ -42,6 +42,7 @@
 #include "ps2gpu/display.h"
 #endif
 #include "ps2host/gs.h"
+#include "ps2host/iop_vm.h"
 #include "ps2host/ipu.h"
 #include "ps2host/memory.h"
 #include "ps2host/path3.h"
@@ -475,6 +476,11 @@ void FrameTimes(u64 frame) {
         std::snprintf(job_text + used, sizeof job_text - used, "%s", lag.c_str());
     }
 #endif
+    {
+        const std::string gaps = iop::RunGaps();
+        const std::size_t used = std::strlen(job_text);
+        std::snprintf(job_text + used, sizeof job_text - used, "%s", gaps.c_str());
+    }
     last_full = full;
     static u64 last_gpu_us = 0;
     const u64 gpu_us = GpuBusyMicroseconds();

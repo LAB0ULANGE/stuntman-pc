@@ -544,6 +544,12 @@ void SetAudioSteer(bool on);
    mode 3; VideoModeAsked), not NTSC's 59.94 always (the "pal_timing" setting,
    on by default; --pal-timing). A virtual-time run keeps 59.94. */
 void SetPalTiming(bool on);
+/* In real time, the IOP runs while the EE waits for the GS thread or the VIF1
+   worker (IopWhileEeWaits, called in those waits; the "iop_while_waiting"
+   setting, on by default; --iop-while-waiting on|off): a sound stream's
+   thread fills its buffer in time. Only the EE's own thread runs it. */
+void SetIopWhileWaiting(bool on);
+void IopWhileEeWaits();
 void VideoModeAsked(u32 mode);
 u32 VblankPeriodUs();
 /* The game's frame rate (50 PAL, 60 NTSC) to the window: fullscreen takes a

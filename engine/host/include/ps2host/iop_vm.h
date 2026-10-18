@@ -62,6 +62,13 @@ void RpcCall(std::uint32_t server, std::uint32_t procedure, std::uint32_t size,
    busy IOP can't hang the EE; the EE's idle wait gives it a short slice, so
    a vertical blank is never kept waiting). */
 void Run(std::uint64_t instructions = 20'000'000);
+/* For --frame-times: since the last call, the longest real time between two
+   runs, and how many were over 50 ms ("" before the first run). */
+std::string RunGaps();
+/* Real nanoseconds since the last run ended (0 before it ever ran). */
+std::uint64_t NsSinceRun();
+/* Whether a run is under way (not to be begun again from inside it). */
+bool Running();
 
 /* Log every library call a module makes (--iop-trace). */
 void SetTrace(bool on);

@@ -156,6 +156,7 @@ struct Feed {
         Timed timed(Section::GsWait);
         while (at + words - tail.load(std::memory_order_acquire) > kRing) {
             Rethrow();
+            IopWhileEeWaits();
             std::this_thread::yield();
         }
     }
@@ -185,6 +186,7 @@ struct Feed {
             if (spins < 4096) {
                 Pause();
             } else {
+                IopWhileEeWaits();
                 // Asleep with work queued should not be (Publish), and would
                 // be a wait for ever: woken then, whatever the cause.
                 if (sleeping.load()) Wake();

@@ -591,6 +591,8 @@ int Run(const Options& options) {
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
     SetPalTiming((!options.pal_timing.empty() ? options.pal_timing : Setting("pal_timing", "on")) == "on");
+    SetIopWhileWaiting((!options.iop_while_waiting.empty() ? options.iop_while_waiting
+                                                           : Setting("iop_while_waiting", "on")) == "on");
     SetVif1FramesBehind(std::stoi(!options.vif1_frames_behind.empty() ? options.vif1_frames_behind
                                                                       : Setting("vif1_frames_behind", "1")));
     SetVif1StcNoWait((!options.vif1_stc_no_wait.empty() ? options.vif1_stc_no_wait
@@ -800,6 +802,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--render-queue-frames" && i + 1 < argc) options.render_queue_frames = argv[++i];
         else if (arg == "--audio-steer" && i + 1 < argc) options.audio_steer = argv[++i];
         else if (arg == "--pal-timing" && i + 1 < argc) options.pal_timing = argv[++i];
+        else if (arg == "--iop-while-waiting" && i + 1 < argc) options.iop_while_waiting = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
         else if (arg == "--audio") options.audio = true;
