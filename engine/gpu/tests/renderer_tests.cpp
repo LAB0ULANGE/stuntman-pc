@@ -457,6 +457,7 @@ void ThreadedRendererAnswers(ps2gpu::Gpu& gpu, bool fast) {
     tested.zbp = 0x1D8;
     Rect(*threaded, tested, 0, 0, 8, 8, 0x80405060u);
     Check(threaded->TargetToMemory(0x1C0, 1, 0, 64, 64, 0), "threaded: a target drawn into goes to memory");
+    Check(threaded->TargetToMemory(0x1D0, 1, 0, 64, 64, 0), "threaded: so does the next one drawn into");
     Check(!threaded->TargetToMemory(0x1C8, 1, 0, 64, 64, 0), "threaded: one never drawn into does not");
     Check(threaded->DepthToMemory(0x1D8, 64, 64, 1, 0, 64, 64, 0), "threaded: the ZBP's depth buffer drawn with");
     Check(threaded->DepthToMemory(0x10000u + 0x1C0, 64, 64, 1, 0, 64, 64, 0),
