@@ -41,6 +41,29 @@ class TestDispatch(unittest.TestCase):
         self.assertIn("kGuestFunctionCount = 3;", text)
         self.assertIn("void F_00100008(lifted::Context& c);", text)
 
+    def test_branch_targets_are_calls_and_tail_calls(self):
+        text = ("out(); Call(c, 0x00100040u, 0x00100008u); in();\n"
+                "{ lifted::TailCall(c, 0x00100100u, entry_ra, entry_sp); return; }\n"
+                "v0 = 0x00100200ull; Write32(0x00100300u, v0);\n")
+        self.assertEqual(port.branch_targets([text]), {0x100040, 0x100100})
+
+    def test_branch_targets_with_no_translation_are_translated_till_none_is_left(self):
+        # 0x200's translation branches back to 0x180 (a loop head before where
+        # it starts), whose own goes to 0x140; 0x300 cannot be translated.
+        made = {0x180: "lifted::TailCall(c, 0x00000140u, entry_ra, entry_sp);",
+                0x140: "/* returns */", 0x300: None}
+        asked = []
+
+        def translate(address):
+            asked.append(address)
+            return made.get(address)
+
+        texts = ["lifted::TailCall(c, 0x00000180u, entry_ra, entry_sp); Call(c, 0x00000100u, 0x0u);"
+                 " Call(c, 0x00000300u, 0x0u);"]
+        found = port.close_over_targets(texts, {0x100, 0x200}, translate)
+        self.assertEqual(found, {0x180: made[0x180], 0x140: made[0x140]})
+        self.assertEqual(sorted(asked), [0x140, 0x180, 0x300])
+
 
 if __name__ == "__main__":
     unittest.main()

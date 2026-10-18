@@ -43,6 +43,8 @@ from ps2decomp import game as game_config  # noqa: E402
 import vurecomp  # noqa: E402
 
 _FUNCTION = re.compile(r"^void F_([0-9A-F]{8})\(lifted::Context& c\) \{$", re.M)
+# A call or a tail call to a fixed address, in translated code.
+_TARGET = re.compile(r"\b(?:Tail)?Call\(c, 0x([0-9A-F]{8})u")
 
 
 def translated_functions(directory: str) -> list:
@@ -53,6 +55,34 @@ def translated_functions(directory: str) -> list:
             with open(os.path.join(directory, name), encoding="utf-8") as handle:
                 found.update(int(m.group(1), 16) for m in _FUNCTION.finditer(handle.read()))
     return sorted(found)
+
+
+def branch_targets(texts) -> set:
+    """Every fixed address translated code calls or tail-calls - a branch out
+    of a function's range (a loop head before a function found at run time
+    starts, say) is a tail call to where it goes."""
+    found = set()
+    for text in texts:
+        found.update(int(m.group(1), 16) for m in _TARGET.finditer(text))
+    return found
+
+
+def close_over_targets(texts, known: set, translate) -> dict:
+    """{address: C++} for the branch targets in `texts` with no translation
+    in `known`, each translated by translate(address) (None: it cannot be,
+    left out), and theirs in turn, until none is left: a target no function
+    starts at stopped the run when a branch went there (Stuntman's first
+    stunt, played: 0x001B325C's loop back to 0x001B3220)."""
+    found = {}
+    pending = branch_targets(texts) - set(known)
+    while pending:
+        address = min(pending)
+        pending.discard(address)
+        text = translate(address)
+        found[address] = text
+        if text is not None:
+            pending |= branch_targets([text]) - set(known) - set(found)
+    return {a: t for a, t in found.items() if t is not None}
 
 
 def dispatch_source(addresses, names: dict, untranslated=(), sizes=None) -> str:
@@ -104,20 +134,37 @@ def discovered_functions(game, paths) -> dict:
     lift.use_sections([(image, section.addr)] + [(elf.section_data(s), s.addr) for s in elf.sections
                                                   if s.is_alloc and s.size and s is not section and s.type != 8])
     found = {}
+    for run, source in sorted(pairs):
+        text = translate_at(game, run, source)
+        if text is not None:
+            found[run] = (source, text)
+    return found
+
+
+def translate_at(game, run: int, source: int, quiet: bool = False):
+    """The code at `source` in the executable translated at `run`, or None."""
+    elf = game.load_elf()
+    section = elf.exec_sections[0]
+    image = elf.section_data(section)
+    # Lifted from a slice of the image; its jump tables lie elsewhere in it.
+    lift.use_sections([(image, section.addr)] + [(elf.section_data(s), s.addr) for s in elf.sections
+                                                  if s.is_alloc and s.size and s is not section and s.type != 8])
     # The source may lie outside .text: Stuntman copies kernel extensions from .data.
     loaded = [(elf.section_data(s), s.addr) for s in elf.sections
               if s.is_alloc and s.size and s.type != 8]
-    for run, source in sorted(pairs):
-        holder = next(((data, addr) for data, addr in loaded
-                       if addr <= source < addr + len(data)), (image, section.addr))
-        offset = source - holder[1]
-        code = holder[0][offset:offset + gaps.MAX_FUNCTION]
-        try:
-            length = gaps.function_extent(code, run, run)
-            found[run] = (source, lift.lift_function(code, run, run, run + length))
-        except (ValueError, lift.Refused) as exc:
+    holder = next(((data, addr) for data, addr in loaded
+                   if addr <= source < addr + len(data)), None)
+    if holder is None:
+        return None
+    offset = source - holder[1]
+    code = holder[0][offset:offset + gaps.MAX_FUNCTION]
+    try:
+        length = gaps.function_extent(code, run, run)
+        return lift.lift_function(code, run, run, run + length)
+    except (ValueError, lift.Refused) as exc:
+        if not quiet:
             print("  cannot translate the code at 0x%08X (from 0x%08X): %s" % (run, source, exc))
-    return found
+        return None
 
 
 def generate(game) -> str:
@@ -136,6 +183,25 @@ def generate(game) -> str:
     discovered = discovered_functions(game, [committed_discoveries_path(game), discoveries_path(game)])
     # What the analysis has since found is translated - and verified - with the rest.
     discovered = {a: v for a, v in discovered.items() if a not in set(addresses)}
+    # Where translated code branches with no translation there: translated
+    # too (in the executable's code), and where those branch, until none is
+    # left - each was a run stopped the first time a branch went there.
+    elf = game.load_elf()
+    code = elf.exec_sections[0]
+    texts = [text for _, text in discovered.values()]
+    for name in sorted(os.listdir(lifted)):
+        if name.endswith(".cpp"):
+            with open(os.path.join(lifted, name), encoding="utf-8") as handle:
+                texts.append(handle.read())
+    in_code = lambda a: code.addr <= a < code.addr + code.size
+    targets = close_over_targets(texts, set(addresses) | set(discovered),
+                                 lambda a: translate_at(game, a, a, quiet=True) if in_code(a) else None)
+    for address, text in targets.items():
+        discovered[address] = (address, text)
+        names.setdefault(address, "a branch's target")
+    left = branch_targets(texts + list(targets.values())) - set(addresses) - set(discovered)
+    print("branch targets: %d translated (no function started there), %d left with no translation%s"
+          % (len(targets), len(left), (": " + " ".join("0x%08X" % a for a in sorted(left)[:12])) if left else ""))
     copies = ['#include "ps2rt/lifted.h"', "", "using namespace generated;",
               "using namespace lifted;", "",
               "/* Code found copied at run time, translated at its run address. NOT VERIFIED. */",
