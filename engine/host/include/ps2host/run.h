@@ -282,6 +282,14 @@ void SetGsFrameHandler(std::function<void(u64)> handler);
 void StartVif1Worker();
 /* Whether real time runs VIF1 on its worker (default yes; --vif1-sync: no). */
 void SetVif1Worker(bool on);
+/* VIF1_FBRST written with STC alone (a stall at an interrupt bit ended): the
+   EE goes on without waiting for VIF1's worker (the "vif1_stc_no_wait"
+   setting, off by default; --vif1-stc-no-wait). */
+void SetVif1StcNoWait(bool on);
+bool Vif1StcNoWait();
+/* ...the writes that went on so with the worker busy (would have waited). */
+void CountStcUnwaited();
+u64 StcUnwaited();
 /* Real time: vertical blanks `factor` times as often as the display's (1:
    as they come) - for stretches the game only waits through, a loading
    screen counting frames while it loads (a game's hook turns it on and

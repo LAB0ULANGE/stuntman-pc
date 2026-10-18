@@ -2049,6 +2049,41 @@ void GpuBridgeKeepsMemoryAsTheGs() {
 #endif
 }
 
+// VIF1_FBRST written with STC alone (vif1_stc_no_wait): the EE goes on
+// while VIF1's worker is busy; with RST too, or the setting off, it waits
+// for the worker as for any other VIF1 register. After the devices are
+// installed (FBRST's hook), with the worker started: last.
+void FbrstStcAloneGoesOnWithoutWaiting() {
+    ps2host::StartVif1Worker();
+    ps2host::Memory& m = ps2host::GuestMemory();
+    // A command the worker holds on to until released; the write's return
+    // seen before (went on) or after (waited) it ran.
+    const auto ran_before_return = [&](u64 value, bool no_wait) {
+        ps2host::SetVif1StcNoWait(no_wait);
+        std::atomic<bool> release{false}, ran{false};
+        ps2host::Vif1Run([&] {
+            while (!release.load()) std::this_thread::yield();
+            ran = true;
+        });
+        std::thread releaser([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            release = true;
+        });
+        m.Write(0x10003C10u, value, 4);
+        const bool waited = ran.load();
+        releaser.join();
+        ps2host::JoinVif1();
+        return waited;
+    };
+    const bool stc = ran_before_return(8, true);
+    const bool reset = ran_before_return(9, true);      // RST and STC
+    const bool off = ran_before_return(8, false);
+    ps2host::SetVif1StcNoWait(false);
+    Check(!stc && reset && off,
+          "VIF1_FBRST with STC alone goes on without waiting for VIF1's worker (vif1_stc_no_wait); "
+          "with RST, or the setting off, it waits");
+}
+
 void GsCsrFieldHoldsThroughAField() {
     ps2host::InstallDevices();
     ps2host::Memory& m = ps2host::GuestMemory();
@@ -2446,7 +2481,8 @@ int main() {
     GsThreadWakesForEveryPacket();
     SpuDecodesAdpcmAndPlaysAVoice();
     GpuBridgeKeepsMemoryAsTheGs();                  // near the end: it puts the GPU in the GS's stead
-    GsCsrFieldHoldsThroughAField();                 // last: it installs the devices
+    GsCsrFieldHoldsThroughAField();                 // it installs the devices
+    FbrstStcAloneGoesOnWithoutWaiting();            // last: it starts VIF1's worker
     std::printf(g_failures ? "host tests: %d failed\n" : "host tests: all passed\n", g_failures);
     return g_failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

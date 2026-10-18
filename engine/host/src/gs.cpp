@@ -244,6 +244,10 @@ void Gs::Packed(u32 descriptor, u64 low, u64 high) {
 
 void Gs::WriteRegister(u32 address, u64 value) {
     ++register_writes_[address & 0xFF];
+    if (digesting) {
+        Mix(address);
+        Mix(value);
+    }
     switch (address) {
         case 0x00: prim_ = value; queued_ = 0; strip_ = 0; break;
         case 0x01: rgbaq_ = value; rgba_source_ = g_dma_source; break;
@@ -349,6 +353,12 @@ void Gs::Transfer(u64 low, u64 high) {
 }
 
 void Gs::TransferBlock(const u8* data, u32 qwords) {
+    if (digesting)
+        for (u32 i = 0; i < 2 * qwords; ++i) {
+            u64 v;
+            std::memcpy(&v, data + 8 * i, 8);
+            Mix(v);
+        }
     if (!trx_active_) return;
     Finish();                                   // the draws before it land first
     uploads_ += qwords;
@@ -490,6 +500,10 @@ void Gs::LoadClut(u64 tex0) {
 // ---------------------------------------------------------------- display
 
 void Gs::SetPrivileged(u32 address, u64 value) {
+    if (digesting) {
+        Mix(0x100000000ull | address);
+        Mix(value);
+    }
     if (record_) {
         std::fputc('P', record_);
         std::fwrite(&address, 4, 1, record_);

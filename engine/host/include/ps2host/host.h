@@ -110,6 +110,9 @@ struct Options {
     std::string vu_bench;          /* --vu-bench FILE: those runs, timed (and nothing else) */
     bool check_guesses = false;    /* --check-guesses: GIF_STAT guesses checked (virtual time) */
     bool vif1_sync = false;        /* --vif1-sync: VIF1 on the EE's thread in real time too */
+    bool vif1_worker_virtual = false;  /* --vif1-worker-virtual: VIF1's worker in virtual time too (a check) */
+    /* --vif1-stc-no-wait on|off: else the "vif1_stc_no_wait" setting's, off (SetVif1StcNoWait). */
+    std::string vif1_stc_no_wait;
     std::string vu_record;         /* --vu-record: the microprograms run, for vurecomp.py */
     /* --deinterlace weave|off: field mode's pictures, both fields woven as a
        television shows them, or each alone, its lines doubled. Played (a

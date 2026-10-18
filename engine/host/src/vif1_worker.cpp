@@ -147,6 +147,15 @@ void StartVif1Worker() {
 
 bool Vif1Async() { return g_worker != nullptr; }
 
+namespace {
+bool g_stc_no_wait = false;
+}  // namespace
+std::atomic<u64> g_stc_unwaited{0};
+void SetVif1StcNoWait(bool on) { g_stc_no_wait = on; }
+void CountStcUnwaited() { ++g_stc_unwaited; }
+u64 StcUnwaited() { return g_stc_unwaited.load(); }
+bool Vif1StcNoWait() { return g_stc_no_wait; }
+
 bool OnVif1Worker() { return t_on_worker; }
 
 bool Vif1Busy() { return g_worker && g_worker->pending.load(std::memory_order_acquire) != 0; }

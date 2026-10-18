@@ -590,6 +590,11 @@ int Run(const Options& options) {
     GuestMemory().WatchReads(options.watch_reads);
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
+    SetVif1StcNoWait((!options.vif1_stc_no_wait.empty() ? options.vif1_stc_no_wait
+                                                          : Setting("vif1_stc_no_wait", "off")) == "on");
+    // A check: the worker in virtual time too, the run otherwise the same.
+    if (options.vif1_worker_virtual && !options.vif1_sync) StartVif1Worker();
+    if (std::getenv("PS2HOST_GS_DIGEST")) gs::TheGs().digesting = true;
     SetCheckGuesses(options.check_guesses);
     if (!options.vu_snapshot.empty())
         Vu::Snapshots(options.vu_snapshot, u64(options.vu_snapshot_from), options.vu_snapshot_count);
@@ -747,6 +752,8 @@ int Main(int argc, char** argv) {
         else if (arg == "--sample-gs") options.sample = options.sample_gs = true;
         else if (arg == "--sample-vif1") options.sample = options.sample_vif1 = true;
         else if (arg == "--vif1-sync") options.vif1_sync = true;
+        else if (arg == "--vif1-worker-virtual") options.vif1_worker_virtual = true;
+        else if (arg == "--vif1-stc-no-wait" && i + 1 < argc) options.vif1_stc_no_wait = argv[++i];
         else if (arg == "--check-guesses") options.check_guesses = true;
         else if (arg == "--vu-snapshot" && i + 3 < argc) {
             options.vu_snapshot = argv[++i];

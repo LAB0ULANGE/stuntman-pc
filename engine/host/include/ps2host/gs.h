@@ -171,6 +171,12 @@ public:
        [begin, end), read or written: image transfers, local copies, CLUT
        loads, the displayed picture. */
     bool rasterize = true;
+    /* PS2HOST_GS_DIGEST: what the GS is given - every register write, every
+       transferred quadword, every privileged register - hashed in order
+       (FNV-1a), so two runs can be shown to have fed it the same. */
+    bool digesting = false;
+    u64 digest = 0xCBF29CE484222325ull;
+    void Mix(u64 v) { digest = (digest ^ v) * 0x100000001B3ull; }
     /* Words: whole quadwords straight to Qword (true, the gs_whole_qwords
        setting's default), or each word through Word as before. */
     bool whole_qwords = true;

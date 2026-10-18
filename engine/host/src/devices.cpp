@@ -634,8 +634,9 @@ void FrameDone(u64 frame) {
     if ((long long)frame == capture_at) g_capture_request = true;
     if (g_capture_request.exchange(false) && g_capture_frame < 0 && GpuPrimary()) StartCapture(frame);
     const bool capturing = g_capture_frame >= 0 && (long long)frame == g_capture_frame;
+    const bool digest = gs::TheGs().digesting;      // PS2HOST_GS_DIGEST: what the frame gave the GS, all of it
     const bool cpu_reads_gs = dump || stash || (g_dump_frame >= 0 && (long long)frame == g_dump_frame) ||
-                              g_trace_frame >= 0 || capturing;
+                              g_trace_frame >= 0 || capturing || digest;
     if (!cpu_reads_gs && GsFrame(frame)) {
         DbcFrame();
         if (!PumpWindow()) throw GuestExit{0};          // the user closed the window
@@ -645,6 +646,10 @@ void FrameDone(u64 frame) {
     // dumps - sees it with all of the frame's packets taken.
     JoinVif1();
     SyncGs();
+    if (digest)
+        std::fprintf(stderr, "[gs digest] frame %llu %016llX (%llu FBRST.STC not waited for)\n",
+                     (unsigned long long)frame, (unsigned long long)gs::TheGs().digest,
+                     (unsigned long long)StcUnwaited());
     if (capturing) FinishCapture(frame);
     if (g_dump_frame >= 0 && (long long)frame == g_dump_frame) {
         gs::Gs& g = gs::TheGs();

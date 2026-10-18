@@ -147,7 +147,17 @@ void Memory::Watched(u32 address, u64 value, u32 size, const char* what, const c
 void Memory::Write(u32 address, u64 value, u32 size) {
     address = Physical(address);
     // VIF1's FIFO excepted: a quadword stored there goes to the worker in turn (devices.cpp).
-    if (Vif1Busy() && Vif1Sees(address, true) && address - 0x10005000u >= 0x1000u) JoinVif1("write", address);
+    // VIF1_FBRST with STC alone too (Vif1StcNoWait): the stall it ends is the
+    // EE's - devices.cpp's g_vif1_stalled, VIF1_STAT's VIS and INT, the
+    // interrupt scanner - none of it the worker's, and the transfer it lets
+    // go on queues its words after what is queued, as any transfer does.
+    // Stuntman's VIF1 handler writes it ~110 times a picture, and each wait
+    // was for all the worker had (the EE asleep half the stunt).
+    const bool stc_alone = address == 0x10003C10u && size <= 8 && (value & 0xFu) == 8u && Vif1StcNoWait();
+    if (Vif1Busy() && Vif1Sees(address, true) && address - 0x10005000u >= 0x1000u) {
+        if (!stc_alone) JoinVif1("write", address);
+        else CountStcUnwaited();
+    }
     // Into VU0's or VU1's instruction memory: their compiled programs are
     // compared with it again (Vu::MicroWritten).
     if (address - 0x11000000u < 0x10000u && ((address >> 14) & 1) == 0) {
