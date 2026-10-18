@@ -136,6 +136,8 @@ struct Options {
     std::string date_area;
     /* --date-in-pass off|on|check: else the "date_in_pass" setting's, on (SetDateInPass). */
     std::string date_in_pass;
+    /* --vulkan-thread on|off: else the "vulkan_thread" setting's, off (SetVulkanThread). */
+    std::string vulkan_thread;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
     bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */
     bool gpu = false;              /* draw on the GPU instead of the software GS (gpu_bridge.cpp) */

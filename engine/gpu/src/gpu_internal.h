@@ -5,11 +5,19 @@
 
 #include <volk.h>
 
+#include <immintrin.h>
+
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <mutex>
+#include <new>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -64,6 +72,8 @@ inline void CountWait(const char* why, double seconds) {
     }
 }
 
+#include "command_stream.h"
+
 class VulkanGpu final : public Gpu {
 public:
     ~VulkanGpu() override;
@@ -95,6 +105,12 @@ public:
        running). What waited on the work handed over runs once it has run. */
     bool Flush();
     void AfterSubmit(std::function<void()> done) { after_submit_.push_back(std::move(done)); }
+    /* Its command buffers' commands made on a thread of their own
+       (command_stream.h), or as they are recorded; what was recorded is
+       submitted first. Returns whether they are. */
+    bool SetRecordThread(bool on);
+    /* That thread's time making them, in all. */
+    std::uint64_t RecordThreadBusyNs() const { return stream_ ? stream_->busy_ns() : 0; }
     bool recording() const { return open_; }
     /* PS2HOST_GPU_PROFILE: the GPU's time since the last mark (or the command
        buffer's start) counted as `kind` - a timestamp as the work before it
@@ -148,6 +164,7 @@ private:
     int current_ = 0;
     bool in_flight_[kSlots] = {};
     std::vector<std::function<void()>> slot_done_[kSlots];
+    CommandStream* stream_ = nullptr;       // SetRecordThread
     /* Waits for a slot's work, if handed over, and runs what waited on it;
        the time it waited goes to `why`. */
     bool Retire(int slot, const char* why);
@@ -156,10 +173,14 @@ private:
 template <typename F>
 void VulkanGpu::RecordInPass(F&& record) {
     if (!open_) {
-        vkResetCommandBuffer(cmd, 0);
-        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &begin);
+        const auto begin_buffer = [c = cmd](void*) {
+            vkResetCommandBuffer(c, 0);
+            VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(c, &begin);
+        };
+        if (CommandStream* s = StreamFor(cmd)) s->Add(begin_buffer);
+        else begin_buffer(nullptr);
         open_ = true;
         ++recordings_;
         if (timestamps_) {
@@ -227,16 +248,25 @@ inline bool VulkanGpu::Flush() {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestamps_, 2 * std::uint32_t(current_) + 1);
         stamped_[current_] = true;
     }
-    vkEndCommandBuffer(cmd);
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &cmd;
-    vkResetFences(device, 1, &fences[current_]);
-    bool ok;
-    {
+    // Ended and submitted where it was recorded: on the thread, waited for
+    // (the queue's order is the order things were handed over in).
+    VkResult submitted = VK_SUCCESS;
+    const auto end_and_submit = [c = cmd, d = device, q = queue, f = fences[current_], out = &submitted](void*) {
+        vkEndCommandBuffer(c);
+        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &c;
+        vkResetFences(d, 1, &f);
         std::lock_guard<std::mutex> hold(g_queue_lock);
-        ok = vkQueueSubmit(queue, 1, &submit, fences[current_]) == VK_SUCCESS;
+        *out = vkQueueSubmit(q, 1, &submit, f);
+    };
+    if (CommandStream* s = StreamFor(cmd)) {
+        s->Add(end_and_submit);
+        s->Drain();
+    } else {
+        end_and_submit(nullptr);
     }
+    const bool ok = submitted == VK_SUCCESS;
     ++g_submits;
     in_flight_[current_] = ok;
     slot_done_[current_].swap(after_submit_);
@@ -257,6 +287,20 @@ inline bool VulkanGpu::Submit(const char* why) {
     done.swap(after_submit_);
     for (auto& f : done) f();
     return ok;
+}
+
+inline bool VulkanGpu::SetRecordThread(bool on) {
+    if (on == (stream_ != nullptr)) return on;
+    Submit("the recording thread");
+    if (on) {
+        stream_ = new CommandStream(cmds, kSlots);
+        g_stream = stream_;
+    } else {
+        g_stream = nullptr;
+        delete stream_;
+        stream_ = nullptr;
+    }
+    return on;
 }
 
 }  // namespace ps2gpu

@@ -464,6 +464,10 @@ public:
     void SetExactOverlap(bool exact) override { exact_overlap_ = exact; }
     void SetPreparedAxes(bool on) override { prepared_axes_ = on; }
     void SetDateArea(bool batch) override { date_batch_area_ = batch; }
+    bool SetRecordThread(bool on) override {
+        Flush();
+        return g_.SetRecordThread(on);
+    }
     int SetDateInPass(int mode) override;
     bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ) override;
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,

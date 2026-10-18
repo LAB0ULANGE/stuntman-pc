@@ -195,6 +195,11 @@ std::uint32_t VulkanGpu::FindMemory(std::uint32_t bits, VkMemoryPropertyFlags wa
 }
 
 VulkanGpu::~VulkanGpu() {
+    if (stream_) {                      // (its calls made: the stream drains as it goes)
+        if (g_stream == stream_) g_stream = nullptr;
+        delete stream_;
+        stream_ = nullptr;
+    }
     if (device) {
         {
             std::lock_guard<std::mutex> hold(g_queue_lock);

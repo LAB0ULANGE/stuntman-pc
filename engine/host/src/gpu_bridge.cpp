@@ -1914,6 +1914,13 @@ void SetDateArea(const std::string& mode) {
     if (mode == "full") std::fprintf(stderr, "[gpu] DATE set up over the whole target\n");
 }
 
+void SetVulkanThread(bool on) {
+    if (!g_bridge) return;
+    if (on && !g_bridge->renderer->SetRecordThread(true))
+        std::fprintf(stderr, "[gpu] vulkan_thread=on: not with this renderer\n");
+    if (!on) g_bridge->renderer->SetRecordThread(false);
+}
+
 std::string SetDateInPass(const std::string& mode) {
     if (!g_bridge) return "off";
     const int want = mode == "check" ? 2 : mode == "on" ? 1 : 0;

@@ -1977,6 +1977,10 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         gs.WriteRegister(0x47, 1u << 14 | 1u << 15);
         sprite(44, 102, 124, 126, 0x80C0C0C0u ^ colour);
         gs.WriteRegister(0x47, 0);
+        // A narrower scissor while the pass is open: half the sprite drawn.
+        gs.WriteRegister(0x40, u64(63) << 16 | u64(127) << 48);       // SCISSOR x 0..63
+        sprite(0, 64, 128, 70, 0x5A5A5A5Au ^ colour);
+        gs.WriteRegister(0x40, u64(127) << 16 | u64(127) << 48);
         // Textured from rows 32-63 of the picture itself (a target read as a
         // texture), with the same registers each time: the first low, the
         // second over the texture's rows, the third reading what the second
@@ -2011,8 +2015,9 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         gs.Finish();
     };
     // The newer images in a list, the images indexed by page, the DATE setup
-    // over the batch, within the draws' pass; then the ways before
-    // (newer_list=off, owned_index=off, date_area=full, date_in_pass=off);
+    // over the batch, within the draws' pass, the Vulkan commands made on a
+    // thread of their own; then the ways before (newer_list=off,
+    // owned_index=off, date_area=full, date_in_pass=off, vulkan_thread=off);
     // then within the pass checked (date_in_pass=check: no pixel differs).
     bool same = true;
     for (int way = 0; way < 3; ++way) {
@@ -2021,6 +2026,10 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         ps2host::SetDateArea(list ? "batch" : "full");
         ps2host::SetOwnedIndex(list != 0);
         const std::string in_pass = ps2host::SetDateInPass(way == 0 ? "on" : way == 1 ? "off" : "check");
+        // The commands made on a thread of their own, or not; the third time
+        // that thread slowed (what waits for it must).
+        _putenv_s("PS2GPU_STREAM_DELAY_US", way == 2 ? "300" : "0");
+        ps2host::SetVulkanThread(way != 1);
         const u32 fbp = way == 0 ? 0x10 : way == 1 ? 0x30 : 0x50;
         const u32 colour = way == 0 ? 0 : way == 1 ? 0x01010101u : 0x02020202u;
         auto soft = std::make_unique<Gs>();
@@ -2043,6 +2052,8 @@ void GpuBridgeKeepsMemoryAsTheGs() {
         }
     }
     ps2host::SetDateInPass("off");
+    ps2host::SetVulkanThread(false);
+    _putenv_s("PS2GPU_STREAM_DELAY_US", "0");
     ps2host::SetDateArea("batch");
     ps2host::SetNewerList(true);
     ps2host::SetOwnedIndex(true);

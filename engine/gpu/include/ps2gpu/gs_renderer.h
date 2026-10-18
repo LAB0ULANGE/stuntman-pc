@@ -261,6 +261,12 @@ public:
     /* The destination alpha test's setup pass over the batch's rectangle
        (true, the default) or over the whole target. */
     virtual void SetDateArea(bool batch) { (void)batch; }
+    /* The Vulkan commands made on a thread of their own (true), not the
+       one drawing (false, the default). Returns whether they are. */
+    virtual bool SetRecordThread(bool on) {
+        (void)on;
+        return false;
+    }
     /* The destination alpha test's setup: 0 a pass of its own before each
        batch that tests it; 1 within the draws' pass, the target read where
        it is drawn (VK_KHR_dynamic_rendering_local_read) - the same stencil,

@@ -244,6 +244,9 @@ void SetDateArea(const std::string& mode);
    (--date-in-pass).
    Returns the mode taken ("off" where the GPU cannot). */
 std::string SetDateInPass(const std::string& mode);
+/* The GPU renderer's Vulkan commands made on a thread of their own, not the
+   GS thread (the "vulkan_thread" setting, off by default; --vulkan-thread). */
+void SetVulkanThread(bool on);
 /* "check"'s findings: the DATE batches checked, the pixels that differed. */
 bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ);
 /* The GPU renderer's internal resolution, now (a GS replay's; a run takes
