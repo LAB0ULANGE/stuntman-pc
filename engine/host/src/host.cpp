@@ -652,7 +652,7 @@ int Run(const Options& options) {
         SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
         SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
         SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
-        SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "off"));
+        SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
     }
     bool sound = false;
     if (options.audio) {

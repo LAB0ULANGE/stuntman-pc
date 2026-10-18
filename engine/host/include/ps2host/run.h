@@ -239,8 +239,9 @@ void SetDateArea(const std::string& mode);
 /* The destination alpha test's setup within the draws' pass ("on": the
    target read where it is drawn, VK_KHR_dynamic_rendering_local_read - no
    pass ended for it); "check": the same, then compared with the target as a
-   pass of its own reads it (the pixels that differ on stderr); "off" (the
-   "date_in_pass" setting's default; --date-in-pass): a pass of its own.
+   pass of its own reads it (the pixels that differ on stderr); "off": a
+   pass of its own. "on" is the "date_in_pass" setting's default
+   (--date-in-pass).
    Returns the mode taken ("off" where the GPU cannot). */
 std::string SetDateInPass(const std::string& mode);
 /* "check"'s findings: the DATE batches checked, the pixels that differed. */
