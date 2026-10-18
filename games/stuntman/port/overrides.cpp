@@ -19,11 +19,13 @@
 #include "ps2host/iop_vm.h"
 #include "ps2host/memory.h"
 #include "ps2host/run.h"
+#include "ps2host/settings.h"
 
 // The translated originals, which stay callable (port.py's dispatch.cpp).
 void F_00251FE0(lifted::Context& c);
 void F_002521E0(lifted::Context& c);
 void F_00252208(lifted::Context& c);
+void F_001D0DA0(lifted::Context& c);
 
 namespace {
 
@@ -198,9 +200,57 @@ void PatchedFree(lifted::Context& c) {                       // 0x00252208, a ju
     lifted::Call(c, 0x00102838u);
 }
 
+// The light table (0x001D0DA0). Each frame the game builds the 256-entry
+// CLUT a full-screen pass multiplies the picture by, indexed by the light
+// level each pixel keeps in its alpha: max(the ambient light, the level),
+// the ambient being the brightest of the scene's ambient colour (0x005C2180,
+// three floats; 0.37 in the first stunts - 37 %). Shadowed pixels are marked
+// below it, so they come out at the ambient: dark. The PC settings raise
+// the ambient for the table alone (the colour put back after): shadows=off
+// lights everything fully, ambient_light=NN (a percentage) keeps at least
+// that much light in the shadows.
+constexpr u32 kAmbient = 0x005C2180u;
+
+float AmbientWanted() {
+    if (!ps2host::SettingOn("shadows", true)) return 1.0f;
+    const std::string percent = ps2host::Setting("ambient_light", "");
+    if (percent.empty()) return 0.0f;
+    try {
+        return std::stof(percent) / 100.0f;
+    } catch (...) {
+        return 0.0f;
+    }
+}
+
+void LightTable(lifted::Context& c) {
+    ps2host::Memory& m = ps2host::GuestMemory();
+    static const float wanted = AmbientWanted();
+    u64 saved[2] = {0, 0};
+    if (wanted > 0) {
+        saved[0] = m.Read(kAmbient, 8);
+        saved[1] = m.Read(kAmbient + 8, 4);
+        for (u32 i = 0; i < 3; ++i) {
+            const u32 w = u32(m.Read(kAmbient + 4 * i, 4));
+            float v;
+            std::memcpy(&v, &w, 4);
+            if (!(v >= wanted)) {
+                u32 raised;
+                std::memcpy(&raised, &wanted, 4);
+                m.Write(kAmbient + 4 * i, raised, 4);
+            }
+        }
+    }
+    F_001D0DA0(c);
+    if (wanted > 0) {
+        m.Write(kAmbient, saved[0], 8);
+        m.Write(kAmbient + 8, saved[1], 4);
+    }
+}
+
 }  // namespace
 
 void RegisterGameOverrides() {
+    ps2host::Override(0x001D0DA0u, LightTable, "the light table: shadows and ambient light from the PC settings");
     // ps2host::Override(0x00123456u, SomeHook, "what it does and why");
 
     ps2host::Override(0x00253020u, GuestPrintf, "printf: the game's messages to the log as [guest] lines");

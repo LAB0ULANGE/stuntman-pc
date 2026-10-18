@@ -179,3 +179,17 @@ its data (1120 macroblocks) only so; the increments come after each
 macroblock. The host's IDEC (engine commits 00eb882, d56f0b5, 48a77ef)
 decodes so, slice after slice; checked against FFmpeg by
 `engine/tools/idec_check.py`. To do: `language_fr`'s CRCs.
+
+## Shadows and the light table (0x001D0DA0)
+
+Building and car shadows are stencil volumes counted in the red channel of
+a CT24 buffer (FBP 0x154: cleared to 0x80, front faces +1, back faces +0xFF
+with COLCLAMP off, then 0x80 taken off). A pass reads it back as a texture
+(TEXA AEM: alpha 0 where the count is 0) and, by alpha test, marks shadowed
+pixels' alpha at the ambient level (0x2E). Each pixel's alpha is its light
+level; a full-screen pass then multiplies the picture by a CLUT read with
+the frame's alpha as a PSMT8H index. 0x001D0DA0 builds that CLUT every
+frame: max(the brightest component of the ambient colour at 0x005C2180 *
+128, the level) - 0x2F (37 %) in the first stunts, hence the very dark
+shadows. The port's settings `shadows=off` and `ambient_light=NN` raise the
+ambient for that table alone (overrides.cpp, LightTable).
