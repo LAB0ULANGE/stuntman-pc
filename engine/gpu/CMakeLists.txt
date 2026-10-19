@@ -83,6 +83,15 @@ add_custom_command(OUTPUT ${out}
             glslang-standalone
     COMMENT "glslang swizzle.comp (a target's image)")
 list(APPEND PS2GPU_SHADER_HEADERS ${out})
+# The texture decode straight into the texture's image.
+set(out ${PS2GPU_SHADER_DIR}/decode_image_comp.h)
+add_custom_command(OUTPUT ${out}
+    COMMAND glslang-standalone -V --target-env vulkan1.3 -DIMAGE --vn spirv_decode_image_comp
+            -o ${out} ${CMAKE_CURRENT_LIST_DIR}/shaders/decode.comp
+    DEPENDS ${CMAKE_CURRENT_LIST_DIR}/shaders/decode.comp ${CMAKE_CURRENT_LIST_DIR}/shaders/gs_address.glsl
+            glslang-standalone
+    COMMENT "glslang decode.comp (into the texture's image)")
+list(APPEND PS2GPU_SHADER_HEADERS ${out})
 # ...and from a depth buffer, sampled.
 set(out ${PS2GPU_SHADER_DIR}/swizzle_depth_comp.h)
 add_custom_command(OUTPUT ${out}

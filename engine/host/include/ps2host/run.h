@@ -231,6 +231,10 @@ void SetBatchOverlap(const std::string& mode);
    together before the GPU next uses that memory ("batch", the default), or
    each at once ("each", as before): the "memory_writes" setting. */
 void SetMemoryWrites(const std::string& mode);
+/* Textures decoded on the GPU straight into their image ("direct", the
+   default) or through a linear buffer ("linear", as before): the
+   "texture_decode" setting. */
+void SetTextureDecode(const std::string& mode);
 /* The GPU images newer than local memory kept in a list (the "newer_list"
    setting, on by default; --newer-list on|off), not looked for among all. */
 void SetNewerList(bool on);

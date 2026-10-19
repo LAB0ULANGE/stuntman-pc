@@ -11,6 +11,12 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(std430, binding = 0) readonly buffer Memory { uint mem[]; };
 layout(std430, binding = 1) writeonly buffer Linear { uint lin[]; };
 layout(std430, binding = 2) buffer Clut { uint clut[256]; };
+#ifdef IMAGE
+// Compiled a second time with IMAGE: the texels straight into the texture's
+// image, from row `row0` (a mipmap level's) - no copy through Linear, and
+// its waits for the GPU (texture_decode).
+layout(set = 1, binding = 0, rgba8) uniform writeonly image2D texture_out;
+#endif
 
 layout(push_constant) uniform Params {
     uint tbp, tbw, psm, tw, th;
@@ -19,6 +25,7 @@ layout(push_constant) uniform Params {
     uint ta1;
     uint csa;
     uint mode;          // 0 a texture decoded; 1 a CLUT loaded (below)
+    uint row0;          // (IMAGE)
 } p;
 
 const uint PSMCT32 = 0x00u, PSMCT24 = 0x01u, PSMCT16 = 0x02u, PSMCT16S = 0x0Au;
@@ -175,5 +182,9 @@ void main() {
     if (u >= p.tw || v >= p.th) return;
     const uint x = Wrap(int(u), p.tw, p.wms, p.minu, p.maxu) & 2047u;
     const uint y = Wrap(int(v), p.th, p.wmt, p.minv, p.maxv) & 2047u;
+#ifdef IMAGE
+    imageStore(texture_out, ivec2(u, v + p.row0), unpackUnorm4x8(Expand(Raw(x, y))));
+#else
     lin[v * p.tw + u] = Expand(Raw(x, y));
+#endif
 }

@@ -37,6 +37,7 @@
 #include "swizzle_depth_comp.h"
 #include "depth_load_frag.h"
 #include "decode_comp.h"
+#include "decode_image_comp.h"
 #include "patch_comp.h"
 
 namespace ps2gpu {
@@ -140,6 +141,7 @@ void MemoryBarrier(VkCommandBuffer cmd) {
 struct DecodeParams {
     std::uint32_t tbp, tbw, psm, tw, th, wms, wmt, minu, maxu, minv, maxv, texa_lo, ta1, csa;
     std::uint32_t mode = 0;     // 0 a texture, 1 a CLUT load
+    std::uint32_t row0 = 0;     // decoded into the image (decode_image_): its first row
 };
 
 /* swizzle.comp's push constants. */
@@ -469,6 +471,7 @@ public:
     void ClutRows(const std::uint32_t* clut, std::uint32_t rows) override;
     bool ReadClut(std::uint32_t* clut) override;
     void SetExactOverlap(bool exact) override { exact_overlap_ = exact; }
+    void SetDecodeDirect(bool on) override { decode_direct_ = on; }
     void SetBatchWrites(bool on) override {
         ApplyWrites();
         batch_writes_ = on;
@@ -816,6 +819,16 @@ private:
     void ApplyWrites();
     VkShaderModule decode_ = VK_NULL_HANDLE;
     VkPipeline decode_pipeline_ = VK_NULL_HANDLE;
+    /* The decode straight into the texture's image (SetDecodeDirect, the
+       texture_decode setting): through the linear buffer, then copied in,
+       a decode waited for the GPU six times - the stunt decodes ~350
+       textures a picture, a quarter of the GPU's time. A storage set each
+       texture, from a pool of their own. */
+    bool decode_direct_ = true;
+    VkShaderModule decode_image_ = VK_NULL_HANDLE;
+    VkPipeline decode_image_pipeline_ = VK_NULL_HANDLE;
+    VkDescriptorPool texture_storage_pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet TextureStorageSet(Image& image);
     VkShaderModule swizzle_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout swizzle_set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool swizzle_pool_ = VK_NULL_HANDLE;
@@ -1248,6 +1261,22 @@ bool VulkanGsRenderer::InitMemory(std::string* error) {
             if (error) *error = "the swizzle shader (images) did not load";
             return false;
         }
+        // The decode into a texture's image: the same layout (set 1 the image).
+        VkShaderModuleCreateInfo di{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        di.codeSize = sizeof spirv_decode_image_comp;
+        di.pCode = spirv_decode_image_comp;
+        vkCreateShaderModule(g_.device, &di, nullptr, &decode_image_);
+        VkComputePipelineCreateInfo dp = cpi;
+        dp.stage.module = decode_image_;
+        dp.layout = swizzle_image_layout_;
+        if (!decode_image_ ||
+            vkCreateComputePipelines(g_.device, VK_NULL_HANDLE, 1, &dp, nullptr, &decode_image_pipeline_) != VK_SUCCESS)
+            decode_image_pipeline_ = VK_NULL_HANDLE;     // (decoded through the linear buffer then)
+        VkDescriptorPoolSize texture_size{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8192};
+        VkDescriptorPoolCreateInfo tp = ip;
+        tp.maxSets = 8192;
+        tp.pPoolSizes = &texture_size;
+        vkCreateDescriptorPool(g_.device, &tp, nullptr, &texture_storage_pool_);
     }
     if (!MakeDepthPipelines()) {
         if (error) *error = "the depth buffer shaders did not load";
@@ -1456,6 +1485,24 @@ VkDescriptorSet VulkanGsRenderer::StorageSet(Image& image) {
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &image_set_layout_;
     if (vkAllocateDescriptorSets(g_.device, &ai, &image.storage) != VK_SUCCESS) return VK_NULL_HANDLE;
+    VkDescriptorImageInfo info{VK_NULL_HANDLE, image.view, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = image.storage;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(g_.device, 1, &write, 0, nullptr);
+    return image.storage;
+}
+
+VkDescriptorSet VulkanGsRenderer::TextureStorageSet(Image& image) {
+    if (image.storage) return image.storage;
+    if (!texture_storage_pool_) return VK_NULL_HANDLE;
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = texture_storage_pool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &image_set_layout_;
+    if (vkAllocateDescriptorSets(g_.device, &ai, &image.storage) != VK_SUCCESS) return image.storage = VK_NULL_HANDLE;
     VkDescriptorImageInfo info{VK_NULL_HANDLE, image.view, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = image.storage;
@@ -2341,9 +2388,11 @@ void VulkanGsRenderer::DestroyTexture(Texture texture) {
     // Recorded draws may still sample it: it goes after they have run.
     VkDevice device = g_.device;
     VkDescriptorPool pool = pool_;
-    g_.AfterSubmit([this, device, pool, texture]() mutable {
+    VkDescriptorPool storage = texture_storage_pool_;
+    g_.AfterSubmit([this, device, pool, storage, texture]() mutable {
         for (VkDescriptorSet& set : texture.sets)
             if (set) vkFreeDescriptorSets(device, pool, 1, &set);
+        if (texture.image.storage) vkFreeDescriptorSets(device, storage, 1, &texture.image.storage);
         if (texture.image.view) vkDestroyImageView(device, texture.image.view, nullptr);
         if (texture.image.image) vkDestroyImage(device, texture.image.image, nullptr);
         if (texture.image.memory)
@@ -2361,6 +2410,7 @@ Texture* VulkanGsRenderer::TextureImage(std::uint64_t key, std::uint32_t width, 
                 vkFreeDescriptorSets(g_.device, pool_, 1, &set);
                 set = VK_NULL_HANDLE;
             }
+        if (texture.image.storage) vkFreeDescriptorSets(g_.device, texture_storage_pool_, 1, &texture.image.storage);
         DestroyImage(texture.image);
         auto pooled = texture_pool_.find(std::uint64_t(width) << 32 | height);
         if (pooled != texture_pool_.end() && !pooled->second.empty()) {
@@ -2370,7 +2420,8 @@ Texture* VulkanGsRenderer::TextureImage(std::uint64_t key, std::uint32_t width, 
             return &texture;
         }
         if (!MakeImage(texture.image, width, height,
-                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
+                       VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                           VK_IMAGE_USAGE_STORAGE_BIT))
             return nullptr;
     }
     return &texture;
@@ -2387,6 +2438,56 @@ void VulkanGsRenderer::TextureFromMemory(std::uint64_t key, const GsTextureDecod
     if (!texture) return;
     texture->replacement = 0;
     Image& t = texture->image;
+    const VkDescriptorSet storage = decode_direct_ && decode_image_pipeline_ ? TextureStorageSet(t) : VK_NULL_HANDLE;
+    if (storage) {
+        // Straight into the image: one wait before (memory and the CLUT
+        // written, the draws sampling it before done) and one after.
+        g_.Record([&](VkCommandBuffer cmd) {
+            if (d.clut) {
+                MemoryBarrier(cmd);
+                vkCmdUpdateBuffer(cmd, clut_, 0, 1024, d.clut);
+            }
+            const auto wait = [&](VkImageLayout to, VkAccessFlags access) {
+                ++g_barriers;
+                ++g_transitions;
+                VkMemoryBarrier m{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                m.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+                m.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+                VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                b.oldLayout = t.layout;
+                b.newLayout = to;
+                b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
+                b.dstAccessMask = access;
+                b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = t.image;
+                b.subresourceRange = {t.aspect, 0, t.levels, 0, 1};
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &m, 0,
+                                     nullptr, 1, &b);
+                t.layout = to;
+            };
+            wait(VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_WRITE_BIT);
+            drawn_ = DrawState{};
+            const VkDescriptorSet sets[2] = {swizzle_set_, storage};
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, decode_image_pipeline_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, swizzle_image_layout_, 0, 2, sets, 0, nullptr);
+            std::uint32_t y = 0;
+            for (std::uint32_t n = 0; n < levels; ++n) {
+                const std::uint32_t w = std::max(1u, d.tw >> n), h = std::max(1u, d.th >> n);
+                DecodeParams params{n ? d.level_tbp[n] : d.tbp, n ? std::max(1u, d.level_tbw[n]) : d.tbw, d.psm,
+                                    w, h, d.wms, d.wmt, d.minu >> n, d.maxu >> n, d.minv >> n, d.maxv >> n,
+                                    d.texa_lo, d.ta1, d.csa};
+                params.row0 = y;    // (the image is the levels' heights tall, tw wide)
+                vkCmdPushConstants(cmd, swizzle_image_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof params, &params);
+                ++g_dispatches;
+                vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+                y += h;
+            }
+            g_.Mark(cmd, kProfDecode);
+            // (the other levels' rows written apart: no wait between them)
+            wait(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_SHADER_READ_BIT);
+        });
+        return;
+    }
     g_.Record([&](VkCommandBuffer cmd) {
         MemoryBarrier(cmd);
         if (d.clut) vkCmdUpdateBuffer(cmd, clut_, 0, 1024, d.clut);
@@ -2532,9 +2633,11 @@ void VulkanGsRenderer::ReleaseTexture(std::uint64_t key) {
     }
     VkDevice device = g_.device;
     VkDescriptorPool pool = pool_;
-    g_.AfterSubmit([this, device, pool, texture]() mutable {
+    VkDescriptorPool storage = texture_storage_pool_;
+    g_.AfterSubmit([this, device, pool, storage, texture]() mutable {
         for (VkDescriptorSet& set : texture.sets)
             if (set) vkFreeDescriptorSets(device, pool, 1, &set);
+        if (texture.image.storage) vkFreeDescriptorSets(device, storage, 1, &texture.image.storage);
         if (texture.image.view) vkDestroyImageView(device, texture.image.view, nullptr);
         if (texture.image.image) vkDestroyImage(device, texture.image.image, nullptr);
         if (texture.image.memory)

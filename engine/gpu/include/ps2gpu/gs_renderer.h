@@ -264,6 +264,9 @@ public:
        reads or writes local memory on the GPU (true, the default), or each
        copied at once - the pass ended and the GPU waited for around it. */
     virtual void SetBatchWrites(bool on) { (void)on; }
+    /* TextureFromMemory decoding straight into the texture's image (true,
+       the default) or through a linear buffer copied in after. */
+    virtual void SetDecodeDirect(bool on) { (void)on; }
     /* The exact test by axes worked out once a triangle (true, the default)
        or for each pair. */
     virtual void SetPreparedAxes(bool on) { (void)on; }

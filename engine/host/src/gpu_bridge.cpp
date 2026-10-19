@@ -2130,6 +2130,12 @@ void SetMemoryWrites(const std::string& mode) {
     if (mode == "each") std::fprintf(stderr, "[gpu] memory writes: each at once\n");
 }
 
+void SetTextureDecode(const std::string& mode) {
+    if (!g_bridge) return;
+    g_bridge->renderer->SetDecodeDirect(mode != "linear");
+    if (mode == "linear") std::fprintf(stderr, "[gpu] textures decoded through the linear buffer\n");
+}
+
 void SetTextureCache(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->texture_cache = mode == "off"     ? Bridge::TextureCache::kOff
