@@ -73,7 +73,11 @@ int GsReplay(const std::string& file, const std::string& out) {
         if (scale) GpuSetScale(u32(std::max(1, std::atoi(scale))));
         if (g.on_memory) g.on_memory(0, 16384, true);       // local memory as the dump has it, on the GPU too
     }
-    std::FILE* trace = std::fopen((out + "/trace.txt").c_str(), "w");
+    // PS2HOST_REPLAY_BENCH=n (with PS2HOST_REPLAY_GPU): the stream drawn n
+    // times over, no trace or pictures kept - the GPU's time a picture and
+    // the wall clock's, to weigh a change to the renderer or the bridge.
+    const int bench = std::getenv("PS2HOST_REPLAY_BENCH") ? std::max(1, std::atoi(std::getenv("PS2HOST_REPLAY_BENCH"))) : 0;
+    std::FILE* trace = bench ? nullptr : std::fopen((out + "/trace.txt").c_str(), "w");
     if (trace) {
         g.trace_out = trace;
         g.trace = true;
@@ -83,7 +87,11 @@ int GsReplay(const std::string& file, const std::string& out) {
     auto u64_at = [&](std::size_t o) { u64 v; std::memcpy(&v, data.data() + o, 8); return v; };
     int pictures = 0;
     std::vector<u32> words;
-    while (at < data.size()) {
+    const std::size_t start = at;
+    const u64 gpu_from = GpuBusyMicroseconds();
+    const auto wall_from = std::chrono::steady_clock::now();
+    for (int round = 0; round < std::max(1, bench); ++round)
+    for (at = start; at < data.size();) {
         const char kind = char(data[at++]);
         if (kind == 'R') {
             g.WriteRegister(u32_at(at), u64_at(at + 4));
@@ -118,7 +126,9 @@ int GsReplay(const std::string& file, const std::string& out) {
         } else if (kind == 'V') {
             g.Finish();
             if (trace) std::fprintf(trace, "[gs] ---- vertical blank %d\n", pictures);
-            if (gpu) {
+            if (gpu && bench) {
+                GpuShadowFrame(u64(pictures++), std::string());
+            } else if (gpu) {
                 GpuShadowFrame(u64(pictures), std::string());
                 const std::string dir = out + "/gpu_" + std::to_string(pictures++);
                 std::filesystem::create_directories(dir);
@@ -133,6 +143,11 @@ int GsReplay(const std::string& file, const std::string& out) {
     }
     g.Finish();
     if (gpu && g.on_memory) g.on_memory(0, 16384, false);     // what the GPU drew, into local memory first
+    if (bench && pictures) {
+        const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_from).count();
+        std::fprintf(stderr, "gs-replay bench: %d pictures, GPU %.2f ms a picture, wall %.2f ms a picture\n", pictures,
+                     double(GpuBusyMicroseconds() - gpu_from) / 1000.0 / pictures, wall * 1000.0 / pictures);
+    }
     if (std::FILE* m = std::fopen((out + "/gsmem.bin").c_str(), "wb")) {      // local memory at the end
         std::fwrite(g.memory.data(), 1, kMemory, m);
         std::fclose(m);

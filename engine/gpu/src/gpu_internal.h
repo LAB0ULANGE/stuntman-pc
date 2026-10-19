@@ -157,7 +157,7 @@ private:
     double timestamp_ns_ = 0;               // a tick, in nanoseconds
     bool stamped_[kSlots] = {};
     void MakeTimestamps();
-    static constexpr std::uint32_t kMarks = 8192;
+    static constexpr std::uint32_t kMarks = 65536;
     VkQueryPool profile_ = VK_NULL_HANDLE;
     std::vector<int> marks_[kSlots];
     std::vector<std::function<void()>> after_submit_;
