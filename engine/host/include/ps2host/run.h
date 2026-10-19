@@ -227,6 +227,10 @@ void SetTextureCache(const std::string& mode);
    (the same, each pair's axes worked out anew, as before) or "bbox" (the
    bounding rectangles). */
 void SetBatchOverlap(const std::string& mode);
+/* The CPU's writes to GPU local memory (texture and CLUT uploads) copied
+   together before the GPU next uses that memory ("batch", the default), or
+   each at once ("each", as before): the "memory_writes" setting. */
+void SetMemoryWrites(const std::string& mode);
 /* The GPU images newer than local memory kept in a list (the "newer_list"
    setting, on by default; --newer-list on|off), not looked for among all. */
 void SetNewerList(bool on);

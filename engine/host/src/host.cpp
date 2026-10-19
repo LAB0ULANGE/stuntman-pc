@@ -677,6 +677,7 @@ int Run(const Options& options) {
                         : check && *check == '1'       ? std::string("check")
                                                        : Setting("texture_cache", "on"));
         SetBatchOverlap(!options.batch_overlap.empty() ? options.batch_overlap : Setting("batch_overlap", "exact"));
+        SetMemoryWrites(Setting("memory_writes", "batch"));
         SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
         SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
         SetColclampWrap(Setting("colclamp_wrap", "fast"));

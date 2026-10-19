@@ -423,6 +423,7 @@ public:
     void Flush() override;
     void Kick() override {
         Flush();
+        ApplyWrites();
         g_.Flush();
         ++frame_;
         if (date_in_pass_ == 2) ReportDateCheck(frame_ % 600 == 0);
@@ -468,6 +469,10 @@ public:
     void ClutRows(const std::uint32_t* clut, std::uint32_t rows) override;
     bool ReadClut(std::uint32_t* clut) override;
     void SetExactOverlap(bool exact) override { exact_overlap_ = exact; }
+    void SetBatchWrites(bool on) override {
+        ApplyWrites();
+        batch_writes_ = on;
+    }
     void SetPreparedAxes(bool on) override { prepared_axes_ = on; }
     void SetDateArea(bool batch) override { date_batch_area_ = batch; }
     bool SetRecordThread(bool on) override {
@@ -798,6 +803,17 @@ private:
     VkDescriptorSet clut_set_ = VK_NULL_HANDLE;
     VkBuffer gsmem_ = VK_NULL_HANDLE, linear_ = VK_NULL_HANDLE, clut_ = VK_NULL_HANDLE;
     VkDeviceMemory gsmem_memory_ = VK_NULL_HANDLE, linear_memory_ = VK_NULL_HANDLE, clut_memory_ = VK_NULL_HANDLE;
+    /* The CPU's blocks for local memory not copied yet (SetBatchWrites): a
+       copy each, with the pass ended and the GPU waited for around it, was
+       a tenth of the stunt's GPU time - ~850 a picture, the streamed
+       textures and CLUTs. They go over together before anything reads or
+       writes local memory on the GPU (ApplyWrites); the draws never do. A
+       block written twice keeps its place, its later bytes. */
+    bool batch_writes_ = true;
+    std::vector<std::uint8_t> pending_bytes_;
+    std::vector<std::uint32_t> pending_slot_ = std::vector<std::uint32_t>(16384, ~0u);   // by block: its 256 bytes' place
+    std::vector<std::uint32_t> pending_blocks_;                                          // in the order first written
+    void ApplyWrites();
     VkShaderModule decode_ = VK_NULL_HANDLE;
     VkPipeline decode_pipeline_ = VK_NULL_HANDLE;
     VkShaderModule swizzle_ = VK_NULL_HANDLE;
@@ -1466,6 +1482,19 @@ void VulkanGsRenderer::SwizzleImage(VkCommandBuffer cmd, const SwizzleParams& pa
 
 void VulkanGsRenderer::MemoryWrite(std::uint32_t begin, std::uint32_t end, const std::uint8_t* bytes) {
     if (end <= begin) return;
+    end = std::min(end, 16384u);
+    if (batch_writes_) {
+        for (std::uint32_t block = begin; block < end; ++block) {
+            std::uint32_t& slot = pending_slot_[block];
+            if (slot == ~0u) {
+                slot = std::uint32_t(pending_bytes_.size());
+                pending_bytes_.resize(pending_bytes_.size() + 256);
+                pending_blocks_.push_back(block);
+            }
+            std::memcpy(pending_bytes_.data() + slot, bytes + std::size_t(block - begin) * 256, 256);
+        }
+        return;
+    }
     Flush();
     const VkDeviceSize size = VkDeviceSize(end - begin) * 256;
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -1482,7 +1511,40 @@ void VulkanGsRenderer::MemoryWrite(std::uint32_t begin, std::uint32_t end, const
     });
 }
 
+void VulkanGsRenderer::ApplyWrites() {
+    if (pending_blocks_.empty()) return;
+    Flush();
+    const VkDeviceSize size = pending_bytes_.size();
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    void* mapped = Staging(size, &buffer, &offset);
+    if (mapped) {
+        std::memcpy(mapped, pending_bytes_.data(), std::size_t(size));
+        // One region a run of blocks that follow each other in memory and
+        // in the staging alike (a transfer's, as a rule).
+        std::vector<VkBufferCopy> copies;
+        for (const std::uint32_t block : pending_blocks_) {
+            const VkDeviceSize from = offset + pending_slot_[block], to = VkDeviceSize(block) * 256;
+            if (!copies.empty() && copies.back().srcOffset + copies.back().size == from &&
+                copies.back().dstOffset + copies.back().size == to)
+                copies.back().size += 256;
+            else
+                copies.push_back(VkBufferCopy{from, to, 256});
+        }
+        g_.Record([&](VkCommandBuffer cmd) {
+            MemoryBarrier(cmd);
+            vkCmdCopyBuffer(cmd, buffer, gsmem_, std::uint32_t(copies.size()), copies.data());
+            g_.Mark(cmd, kProfMemory);
+            MemoryBarrier(cmd);
+        });
+    }
+    for (const std::uint32_t block : pending_blocks_) pending_slot_[block] = ~0u;
+    pending_blocks_.clear();
+    pending_bytes_.clear();
+}
+
 void VulkanGsRenderer::MemoryPatch(const std::uint32_t* words, std::size_t count) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     if (!count || !patch_pipeline_) return;
     Flush();
     g_.Record([&](VkCommandBuffer cmd) {
@@ -1506,6 +1568,7 @@ void VulkanGsRenderer::MemoryPatch(const std::uint32_t* words, std::size_t count
 }
 
 void VulkanGsRenderer::MemoryRead(std::uint32_t begin, std::uint32_t end, std::uint8_t* bytes) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     if (end <= begin) return;
     Flush();
     const VkDeviceSize size = VkDeviceSize(end - begin) * 256;
@@ -1528,6 +1591,7 @@ void VulkanGsRenderer::MemoryRead(std::uint32_t begin, std::uint32_t end, std::u
 
 bool VulkanGsRenderer::TargetToMemory(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint32_t cols,
                                       std::uint32_t rows, std::uint32_t first_row) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     Flush();   // a target the batch being drawn makes is found too
     auto found = targets_.find(Key{fbp, fbw, psm});
     if (found == targets_.end()) return false;
@@ -1546,6 +1610,7 @@ bool VulkanGsRenderer::TargetToMemory(std::uint32_t fbp, std::uint32_t fbw, std:
 
 void VulkanGsRenderer::TargetFromMemory(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm,
                                         std::uint32_t width, std::uint32_t height) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     Flush();
     GsDrawState state;
     state.fbp = fbp;
@@ -1567,6 +1632,7 @@ void VulkanGsRenderer::TargetFromMemory(std::uint32_t fbp, std::uint32_t fbw, st
 bool VulkanGsRenderer::DepthToMemory(std::uint32_t zbp, std::uint32_t width, std::uint32_t height, std::uint32_t fbw,
                                      std::uint32_t zpsm, std::uint32_t cols, std::uint32_t rows,
                                      std::uint32_t first_row) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     Flush();   // a target the batch being drawn makes is found too
     auto found = depths_.find(Key{zbp, width, height});
     if (found == depths_.end()) return false;
@@ -1586,6 +1652,7 @@ bool VulkanGsRenderer::DepthToMemory(std::uint32_t zbp, std::uint32_t width, std
 void VulkanGsRenderer::TargetRowsFromMemory(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm,
                                             std::uint32_t width, std::uint32_t height, std::uint32_t first_row,
                                             std::uint32_t rows) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     // An image not made yet holds nothing: all of it, then.
     if (!targets_.count(Key{fbp, fbw, psm})) return TargetFromMemory(fbp, fbw, psm, width, height);
     Flush();
@@ -1610,6 +1677,7 @@ void VulkanGsRenderer::TargetRowsFromMemory(std::uint32_t fbp, std::uint32_t fbw
 void VulkanGsRenderer::DepthRowsFromMemory(std::uint32_t zbp, std::uint32_t width, std::uint32_t height,
                                            std::uint32_t fbw, std::uint32_t zpsm, std::uint32_t first_row,
                                            std::uint32_t rows) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     // The depth images are kept by size as well: one not made yet for this
     // size holds nothing, and comes whole.
     if (!depths_.count(Key{zbp, width, height})) return DepthFromMemory(zbp, width, height, fbw, zpsm);
@@ -1626,6 +1694,7 @@ void VulkanGsRenderer::DepthRowsFromMemory(std::uint32_t zbp, std::uint32_t widt
 
 void VulkanGsRenderer::DepthFromMemory(std::uint32_t zbp, std::uint32_t width, std::uint32_t height,
                                        std::uint32_t fbw, std::uint32_t zpsm) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     Flush();
     Image* d = DepthFor(zbp, width, height);
     g_.Record([&](VkCommandBuffer cmd) {
@@ -2308,6 +2377,7 @@ Texture* VulkanGsRenderer::TextureImage(std::uint64_t key, std::uint32_t width, 
 }
 
 void VulkanGsRenderer::TextureFromMemory(std::uint64_t key, const GsTextureDecode& d) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     Flush();                        // what is pending may sample the old contents
     // Mipmap levels below level 0, each at the left edge (gs.frag's Texel).
     const std::uint32_t levels = std::min(7u, std::max(1u, d.levels));
@@ -2356,6 +2426,7 @@ void VulkanGsRenderer::TextureFromMemory(std::uint64_t key, const GsTextureDecod
 }
 
 void VulkanGsRenderer::ClutFromMemory(const GsClutLoad& load) {
+    ApplyWrites();                  // the CPU's blocks first (SetBatchWrites)
     Flush();                        // what is pending may draw the CLUT, or sample through the old one
     DecodeParams params{load.cbp, 1, load.cpsm, load.eight ? 256u : 16u, 1, 0, 0, 0, 0, 0, 0,
                         load.texa_lo, load.ta1, load.csa};

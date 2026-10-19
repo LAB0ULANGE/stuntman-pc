@@ -2124,6 +2124,12 @@ void SetBatchOverlap(const std::string& mode) {
     if (mode == "bbox") std::fprintf(stderr, "[gpu] batch overlap: bounding rectangles\n");
 }
 
+void SetMemoryWrites(const std::string& mode) {
+    if (!g_bridge) return;
+    g_bridge->renderer->SetBatchWrites(mode != "each");
+    if (mode == "each") std::fprintf(stderr, "[gpu] memory writes: each at once\n");
+}
+
 void SetTextureCache(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->texture_cache = mode == "off"     ? Bridge::TextureCache::kOff

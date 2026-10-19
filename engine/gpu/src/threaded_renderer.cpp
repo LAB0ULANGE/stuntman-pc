@@ -227,6 +227,10 @@ public:
         std::lock_guard<std::mutex> hold(lock_);
         Queue([r = inner_.get(), exact](void*) { r->SetExactOverlap(exact); });
     }
+    void SetBatchWrites(bool on) override {
+        std::lock_guard<std::mutex> hold(lock_);
+        Queue([r = inner_.get(), on](void*) { r->SetBatchWrites(on); });
+    }
     void SetPreparedAxes(bool on) override {
         std::lock_guard<std::mutex> hold(lock_);
         Queue([r = inner_.get(), on](void*) { r->SetPreparedAxes(on); });
