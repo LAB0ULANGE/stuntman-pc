@@ -281,9 +281,10 @@ void SetPresentOnRenderThread(bool on);
 std::string PresentLag();
 /* The frame (vertical blank) the EE is at. */
 u64 EeFrame();
-/* The renderer's queue (render_thread): "fast" - a draw's state, target and
-   depth buffer only when they change, the "render_queue" setting's default
-   - or "plain" (--render-queue). */
+/* The renderer's queue (render_thread): "batch" - as "fast", and draws with
+   the state of the one before queued together, the "render_queue" setting's
+   default - "fast" (a draw's state, target and depth buffer only when they
+   change) or "plain" (--render-queue). */
 void SetRenderQueue(const std::string& mode);
 /* The renderer on its thread at most `frames` frames behind the GS thread,
    which waits past that (the "render_queue_frames" setting, 1 by default, 0

@@ -2006,6 +2006,7 @@ void SetDateArea(const std::string& mode) {
 }
 
 bool g_render_queue_fast = false;           // SetRenderQueue
+bool g_render_queue_batch = false;
 u32 g_render_queue_frames = 0;              // SetRenderQueueFrames
 
 void SetRenderQueueFrames(u32 frames) {
@@ -2015,7 +2016,9 @@ void SetRenderQueueFrames(u32 frames) {
 
 void SetRenderQueue(const std::string& mode) {
     g_render_queue_fast = mode != "plain";
+    g_render_queue_batch = mode == "batch";
     if (g_bridge) g_bridge->renderer->SetQueueFast(g_render_queue_fast);
+    if (g_bridge) g_bridge->renderer->SetQueueBatch(g_render_queue_batch);
 }
 
 void SetPresentOnRenderThread(bool on) {
@@ -2032,6 +2035,7 @@ std::string SetRenderThread(const std::string& mode) {
     g_bridge->renderer = ps2gpu::CreateThreadedRenderer(std::move(g_bridge->renderer), mode == "check");
     g_bridge->renderer->SetThenQueued(g_present_on_render_thread);
     g_bridge->renderer->SetQueueFast(g_render_queue_fast);
+    g_bridge->renderer->SetQueueBatch(g_render_queue_batch);
     g_bridge->renderer->SetMaxQueuedFrames(g_render_queue_frames);
     if (mode == "check")
         std::fprintf(stderr, "[gpu] the renderer on a thread of its own, its answers checked\n");

@@ -290,6 +290,9 @@ public:
     /* ...and its queue: each draw's state, target and depth buffer taken as
        they come (false), or only when they change (true). */
     virtual void SetQueueFast(bool fast) { (void)fast; }
+    /* ...and, fast, draws with the state of the one before held back and
+       queued together (true) rather than one by one. */
+    virtual void SetQueueBatch(bool batch) { (void)batch; }
     /* ...the frames (Kick) queued and not yet made: how far behind its thread is. */
     virtual std::uint64_t QueuedFrames() const { return 0; }
     /* ...at most this many frames queued, the caller waiting past them (0: no limit). */

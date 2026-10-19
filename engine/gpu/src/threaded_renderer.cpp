@@ -37,11 +37,11 @@ public:
     ThreadedRenderer(std::unique_ptr<GsRenderer> inner, bool check)
         : inner_(std::move(inner)), check_(check), queue_(nullptr, 0), scale_(inner_->Scale()) {}
     ~ThreadedRenderer() override {
-        if (inner_) queue_.Drain();
+        if (inner_) Drain();
     }
     std::unique_ptr<GsRenderer> TakeInner() override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return std::move(inner_);
     }
 
@@ -120,6 +120,15 @@ public:
         }
         // Fast: the state sent only when it changes; the thread keeps the last.
         if (fast_ && sent_state_ && std::memcmp(&state, &sent_, sizeof state) == 0) {
+            if (batch_) {
+                const std::size_t at = held_.size(), bytes = count * sizeof(GsVertex);
+                held_.resize(at + 4 + bytes);
+                const std::uint32_t n = std::uint32_t(count);
+                std::memcpy(held_.data() + at, &n, 4);
+                std::memcpy(held_.data() + at + 4, vertices, bytes);
+                if (held_.size() >= kHeldMax) SendDraws();
+                return;
+            }
             Queue([r = inner_.get(), s = &thread_state_, count](void* p) {
                       r->DrawTriangles(*s, static_cast<const GsVertex*>(p), count);
                   },
@@ -254,7 +263,7 @@ public:
         std::lock_guard<std::mutex> hold(lock_);
         const bool known = targets_.count(Key{fbp, fbw, psm}) != 0;
         if (check_) {
-            queue_.Drain();
+            Drain();
             return Compare("TargetToMemory", fbp, known, inner_->TargetToMemory(fbp, fbw, psm, cols, rows, first_row));
         }
         Queue([r = inner_.get(), fbp, fbw, psm, cols, rows, first_row](void*) {
@@ -267,7 +276,7 @@ public:
         std::lock_guard<std::mutex> hold(lock_);
         const bool known = depths_.count(Key{zbp, width, height}) != 0;
         if (check_) {
-            queue_.Drain();
+            Drain();
             return Compare("DepthToMemory", zbp, known,
                            inner_->DepthToMemory(zbp, width, height, fbw, zpsm, cols, rows, first_row));
         }
@@ -283,7 +292,7 @@ public:
     bool Then(std::function<void(GsRenderer&)> call) override {
         std::lock_guard<std::mutex> hold(lock_);
         if (!then_queued_) {
-            queue_.Drain();
+            Drain();
             call(*inner_);
             return true;
         }
@@ -299,8 +308,14 @@ public:
         std::lock_guard<std::mutex> hold(lock_);
         max_frames_ = frames;
     }
+    void SetQueueBatch(bool batch) override {
+        std::lock_guard<std::mutex> hold(lock_);
+        SendDraws();
+        batch_ = batch;
+    }
     void SetQueueFast(bool fast) override {
         std::lock_guard<std::mutex> hold(lock_);
+        SendDraws();
         fast_ = fast;
         last_target_ = nullptr;
         last_depth_valid_ = false;
@@ -315,84 +330,84 @@ public:
     bool UploadReplacement(std::uint64_t id, std::uint32_t format, std::uint32_t width, std::uint32_t height,
                            std::uint32_t levels, const std::uint8_t* data, std::size_t bytes) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->UploadReplacement(id, format, width, height, levels, data, bytes);
     }
     bool HasReplacement(std::uint64_t id) const override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->HasReplacement(id);
     }
     bool HasTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm) const override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->HasTarget(fbp, fbw, psm);
     }
     void MemoryRead(std::uint32_t begin, std::uint32_t end, std::uint8_t* bytes) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         inner_->MemoryRead(begin, end, bytes);
     }
     bool SetRecordThread(bool on) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->SetRecordThread(on);
     }
     int SetDateInPass(int mode) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->SetDateInPass(mode);
     }
     bool DateInPassCheck(std::uint64_t* batches, std::uint64_t* differ) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->DateInPassCheck(batches, differ);
     }
     bool ReadClut(std::uint32_t* clut) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->ReadClut(clut);
     }
     bool ReadDepth(std::uint32_t zbp, std::uint32_t width, std::uint32_t height,
                    std::vector<std::uint32_t>* z) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->ReadDepth(zbp, width, height, z);
     }
     bool ReadTexture(std::uint64_t key, std::vector<std::uint32_t>* pixels, std::uint32_t* width,
                      std::uint32_t* height) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->ReadTexture(key, pixels, width, height);
     }
     bool DisplayTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint64_t* image, int* layout,
                        std::uint32_t* width, std::uint32_t* height) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->DisplayTarget(fbp, fbw, psm, image, layout, width, height);
     }
     bool WeaveField(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::uint32_t first_line,
                     std::uint32_t lines, std::uint32_t parity, std::uint64_t* image, int* layout,
                     std::uint32_t* width, std::uint32_t* height) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->WeaveField(fbp, fbw, psm, first_line, lines, parity, image, layout, width, height);
     }
     bool ReadTarget(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                     std::uint32_t* width, std::uint32_t* height) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->ReadTarget(fbp, fbw, psm, pixels, width, height);
     }
     bool ReadWoven(std::vector<std::uint32_t>* pixels, std::uint32_t* width, std::uint32_t* height) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->ReadWoven(pixels, width, height);
     }
     bool ReadTargetFull(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm, std::vector<std::uint32_t>* pixels,
                         std::uint32_t* width, std::uint32_t* height) override {
         std::lock_guard<std::mutex> hold(lock_);
-        queue_.Drain();
+        Drain();
         return inner_->ReadTargetFull(fbp, fbw, psm, pixels, width, height);
     }
     bool RenderThreadCheck(std::uint64_t* answers, std::uint64_t* differ) override {
@@ -410,16 +425,40 @@ private:
 
     template <typename F>
     void Queue(F&& call) {
+        SendDraws();
         queue_.Add(std::forward<F>(call));
     }
     template <typename F, typename G>
     void Queue(F&& call, const void* data, std::size_t bytes, G&& at_once) {
+        SendDraws();
         if (bytes > kMaxPayload) {
-            queue_.Drain();
+            Drain();
             at_once();
             return;
         }
         queue_.Add(std::forward<F>(call), data, bytes);
+    }
+    /* Everything queued run, the draws held back sent first. */
+    void Drain() const {
+        const_cast<ThreadedRenderer*>(this)->SendDraws();
+        queue_.Drain();
+    }
+    /* The draws held back (SetQueueBatch), queued as one: on the thread,
+       each drawn as it was asked for, with the thread's state. */
+    void SendDraws() {
+        if (held_.empty()) return;
+        queue_.Add([r = inner_.get(), s = &thread_state_, size = held_.size()](void* p) {
+                       const unsigned char* at = static_cast<const unsigned char*>(p);
+                       const unsigned char* const end = at + size;
+                       while (at < end) {
+                           std::uint32_t count;
+                           std::memcpy(&count, at, 4);
+                           r->DrawTriangles(*s, reinterpret_cast<const GsVertex*>(at + 4), count);
+                           at += 4 + count * sizeof(GsVertex);
+                       }
+                   },
+                   held_.data(), held_.size());
+        held_.clear();
     }
     /* A target the renderer makes (or has): its size as first made. */
     const std::pair<std::uint32_t, std::uint32_t>& Made(std::uint32_t fbp, std::uint32_t fbw, std::uint32_t psm,
@@ -448,6 +487,14 @@ private:
     // thread_state_) - the bridge draws a primitive at a time, thousands a
     // picture, most with the state of the one before.
     bool fast_ = false;
+    // SetQueueBatch (render_queue batch): fast, and a draw with the state
+    // sent before held back with the ones before it, queued together when
+    // anything else is (SendDraws) - a queued call each, two millions a
+    // second in the stunt, was a fifth of the GS thread. Each its count
+    // (4 bytes) then its vertices.
+    bool batch_ = false;
+    std::vector<unsigned char> held_;
+    static constexpr std::size_t kHeldMax = std::size_t(64) << 10;
     bool then_queued_ = false;              // SetThenQueued
     std::atomic<std::uint64_t> kicks_asked_{0}, kicks_made_{0};   // QueuedFrames
     std::uint32_t max_frames_ = 0;          // SetMaxQueuedFrames (0: no limit)
