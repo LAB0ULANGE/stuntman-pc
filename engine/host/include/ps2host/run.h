@@ -235,10 +235,12 @@ void SetNewerList(bool on);
    for among all. */
 void SetOwnedIndex(bool on);
 /* COLCLAMP off honoured on the GPU - a blend's low eight bits, in the
-   shader (the "colclamp_wrap" setting, on by default); off, such blends
+   shader (the "colclamp_wrap" setting, "on" by default); "off", such blends
    clamp as the blender does: faster, and wrong where a game counts by
-   wrapping (Stuntman's shadows). */
-void SetColclampWrap(bool on);
+   wrapping (Stuntman's shadows); "fast", a flat colour added that way drawn
+   by the blender as an addition or a subtraction (the same while the count
+   does not wrap), the rest in the shader. */
+void SetColclampWrap(const std::string& mode);
 /* The destination alpha test's setup: over the batch's rectangle ("batch",
    the "date_area" setting's default) or the whole target ("full";
    --date-area). */

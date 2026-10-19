@@ -226,7 +226,7 @@ struct Bridge {
     std::vector<std::vector<Owned*>> owned_pages = std::vector<std::vector<Owned*>>(512);
     u64 visit = 0;
     bool owned_index = true;
-    bool colclamp_wrap = true;          // SetColclampWrap
+    int colclamp_wrap = 2;              // SetColclampWrap: 0 off, 1 exact (in the shader), 2 fast
     mutable std::vector<Owned*> newer;
     mutable bool newer_sorted = true;
     bool newer_list = true;
@@ -413,6 +413,8 @@ void WriteBackLost(u32 begin, u32 end) {        // written over: the write-back 
 }  // namespace
 
 u64 GpuBusyMicroseconds() { return ps2gpu::GpuBusyNanoseconds() / 1000; }
+
+bool CountingByBlender(ps2gpu::GsDrawState* st, ps2gpu::GsVertex* v, std::size_t n);
 
 namespace {
 
@@ -1428,6 +1430,7 @@ void OnDraw(const gs::Gs::DrawCall& call) {
         ps2gpu::GsDrawState st = fast.state;
         st.gouraud = gouraud;
         for (std::size_t i = 0; i < n; ++i) v[i].z = std::min(v[i].z, fast.zmax);
+        if (s.colclamp_wrap == 2) CountingByBlender(&st, v, n);
         s.renderer->DrawTriangles(st, v, n);
         if (fast.draws_colour) Drew(s, *fast.target, x0, x1, y1, y0);
         if (fast.depth) Drew(s, *fast.depth, x0, x1, y1, y0);
@@ -1551,7 +1554,7 @@ void OnDraw(const gs::Gs::DrawCall& call) {
     state.d = ps2gpu::BlendColour(std::min(2u, Bits(c.alpha, 6, 2)));
     state.fix = Bits(c.alpha, 32, 8);
     state.pabe = call.pabe;
-    state.colclamp = call.colclamp || !s.colclamp_wrap;
+    state.colclamp = call.colclamp || s.colclamp_wrap == 0;
     state.fog = (call.prim >> 5) & 1;
     state.fogcol = u32(call.fogcol & 0xFFFFFF);
     // Depth: ZTE with ZBUF.
@@ -1611,7 +1614,13 @@ void OnDraw(const gs::Gs::DrawCall& call) {
     for (std::size_t i = 0; i < n; ++i) v[i].z = std::min(v[i].z, zmax);
     // Not timed apart: tens of millions of primitives a race, and a timer's
     // two clock reads each cost as much as recording one.
-    s.renderer->DrawTriangles(state, v, n);
+    if (s.colclamp_wrap == 2) {
+        ps2gpu::GsDrawState counted = state;
+        if (CountingByBlender(&counted, v, n)) s.renderer->DrawTriangles(counted, v, n);
+        else s.renderer->DrawTriangles(state, v, n);
+    } else {
+        s.renderer->DrawTriangles(state, v, n);
+    }
     if (s.primary) {
         // FBMSK over every bit the format stores: the colour is not written.
         const u32 stored = state.psm == gs::PSMCT24 ? 0xFFFFFFu : Is16(state.psm) ? 0x80F8F8F8u : 0xFFFFFFFFu;
@@ -2060,10 +2069,46 @@ void SetOwnedIndex(bool on) {
     if (!on) std::fprintf(stderr, "[gpu] images over blocks: looked for among all\n");
 }
 
-void SetColclampWrap(bool on) {
+void SetColclampWrap(const std::string& mode) {
     if (!g_bridge) return;
-    g_bridge->colclamp_wrap = on;
-    if (!on) std::fprintf(stderr, "[gpu] COLCLAMP off taken as on: blends clamp (colclamp_wrap=off)\n");
+    g_bridge->colclamp_wrap = mode == "off" ? 0 : mode == "fast" ? 2 : 1;
+    if (mode == "off") std::fprintf(stderr, "[gpu] COLCLAMP off taken as on: blends clamp (colclamp_wrap=off)\n");
+    if (mode == "fast") std::fprintf(stderr, "[gpu] COLCLAMP off: counting blends by the blender (colclamp_wrap=fast)\n");
+}
+
+/* colclamp_wrap=fast: a primitive adding a flat colour to the target, COLCLAMP
+   off (Cs + Cd, FIX 0x80, untextured - Stuntman counting its shadow volumes,
+   +1 and 0xFF from 0x80), drawn by the blender rather than in the shader: a
+   colour of bytes 0 or 0x80 and over as a subtraction, Cd - (0x100 - Cs),
+   one of bytes under 0x80 as the addition. The same as the GS's wrap while
+   the count stays within 0-255 (it starts at 0x80); the blender clamps
+   where it would wrap. False: as it was (the shader's exact wrap). */
+bool CountingByBlender(ps2gpu::GsDrawState* st, ps2gpu::GsVertex* v, std::size_t n) {
+    using ps2gpu::BlendAlpha;
+    using ps2gpu::BlendColour;
+    if (!st->blend || st->colclamp || st->textured || !n) return false;
+    if (st->a != BlendColour::Source || st->b != BlendColour::Zero || st->c != BlendAlpha::Fix || st->fix != 0x80 ||
+        st->d != BlendColour::Dest)
+        return false;
+    const std::uint8_t rgb[3] = {v[0].r, v[0].g, v[0].b};
+    for (std::size_t i = 1; i < n; ++i)
+        if (v[i].r != rgb[0] || v[i].g != rgb[1] || v[i].b != rgb[2]) return false;
+    bool low = true, high = true;           // every byte under 0x80; every byte 0 or 0x80 and over
+    for (std::uint8_t c : rgb) {
+        low = low && c < 0x80;
+        high = high && (c == 0 || c >= 0x80);
+    }
+    if (!low && !high) return false;
+    st->colclamp = true;
+    if (low) return true;
+    st->a = BlendColour::Zero;              // Cd - Cs'
+    st->b = BlendColour::Source;
+    for (std::size_t i = 0; i < n; ++i) {
+        v[i].r = std::uint8_t(0x100 - v[i].r);
+        v[i].g = std::uint8_t(0x100 - v[i].g);
+        v[i].b = std::uint8_t(0x100 - v[i].b);
+    }
+    return true;
 }
 
 void SetNewerList(bool on) {
