@@ -157,7 +157,7 @@ struct Options {
     /* --vulkan-thread on|off: else the "vulkan_thread" setting's, on (SetVulkanThread). */
     std::string vulkan_thread;
     bool vu_interpret = false;     /* --vu-interpret: no compiled microprograms */
-    bool vu_fast = false;          /* --vu-fast: VU1 programs without MAC/STATUS readers skip those flags */
+    bool vu_fast = false;          /* --vu-fast (or the "vu_fast" setting): VU1 programs without MAC/STATUS readers skip those flags */
     bool gpu = false;              /* draw on the GPU instead of the software GS (gpu_bridge.cpp) */
     bool gpu_shadow = false;       /* draw on the GPU too, and compare (gpu_bridge.cpp) */
     bool gpu_shadow_rtt = false;   /* ...sampling GPU targets as textures */

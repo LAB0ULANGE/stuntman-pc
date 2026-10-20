@@ -32,6 +32,25 @@
 
 namespace ps2host {
 
+/* The renderer's own choices (PC settings, or the options that override
+   them): a run's, and a replay's (GsReplay) - the GPU time a replay
+   measures is then the game's. */
+void ApplyRendererSettings(const Options& options) {
+    // The texture cache: asked, else the setting's, on by default.
+    const char* check = std::getenv("PS2HOST_TEXTURE_CACHE_CHECK");
+    SetTextureCache(!options.texture_cache.empty() ? options.texture_cache
+                    : check && *check == '1'       ? std::string("check")
+                                                   : Setting("texture_cache", "on"));
+    SetBatchOverlap(!options.batch_overlap.empty() ? options.batch_overlap : Setting("batch_overlap", "exact"));
+    SetMemoryWrites(Setting("memory_writes", "batch"));
+    SetTextureDecode(Setting("texture_decode", "direct"));
+    SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
+    SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
+    SetColclampWrap(Setting("colclamp_wrap", "fast"));
+    SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
+    SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
+}
+
 /* --gs-replay <file> <dir>: a GS stream (engine/tools/pcsx2dump.py's, from a
    PCSX2 GS dump) through the GS model alone: local memory and registers set,
    then GIF packets, privileged registers and vertical blanks in turn - each
@@ -71,6 +90,7 @@ int GsReplay(const std::string& file, const std::string& out) {
         }
         const char* scale = std::getenv("PS2HOST_REPLAY_SCALE");
         if (scale) GpuSetScale(u32(std::max(1, std::atoi(scale))));
+        ApplyRendererSettings(Options{});
         if (g.on_memory) g.on_memory(0, 16384, true);       // local memory as the dump has it, on the GPU too
     }
     // PS2HOST_REPLAY_BENCH=n (with PS2HOST_REPLAY_GPU): the stream drawn n
@@ -666,7 +686,9 @@ int Run(const Options& options) {
     }
     if (!options.memcard.empty()) mc2::SetCardDirectory(options.memcard);
     if (options.vu_interpret) Vu1().use_compiled = Vu0().use_compiled = false;
-    Vu1().fast = options.vu_fast;
+    // VU1 without the flags no instruction reads (PORTING.md's "Fast mode"):
+    // --vu-fast, or the "vu_fast" setting (off unless set).
+    Vu1().fast = options.vu_fast || SettingOn("vu_fast", false);
     SetUntilFrame(options.until_frame);
     SetFrameTimes(options.frame_times);
     gs::TheGs().whole_qwords =
@@ -679,19 +701,7 @@ int Run(const Options& options) {
         const GpuMode mode = options.gpu ? GpuMode::Primary : options.gpu_shadow_rtt ? GpuMode::ShadowRtt : GpuMode::Shadow;
         if (!StartGpuRenderer(&error, mode, options.gpu_show))
             std::fprintf(stderr, "%s: %s\n", options.gpu ? "--gpu" : "--gpu-shadow", error.c_str());
-        // The texture cache: asked, else the setting's, on by default.
-        const char* check = std::getenv("PS2HOST_TEXTURE_CACHE_CHECK");
-        SetTextureCache(!options.texture_cache.empty() ? options.texture_cache
-                        : check && *check == '1'       ? std::string("check")
-                                                       : Setting("texture_cache", "on"));
-        SetBatchOverlap(!options.batch_overlap.empty() ? options.batch_overlap : Setting("batch_overlap", "exact"));
-        SetMemoryWrites(Setting("memory_writes", "batch"));
-        SetTextureDecode(Setting("texture_decode", "direct"));
-        SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
-        SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
-        SetColclampWrap(Setting("colclamp_wrap", "fast"));
-        SetDateArea(!options.date_area.empty() ? options.date_area : Setting("date_area", "batch"));
-        SetDateInPass(!options.date_in_pass.empty() ? options.date_in_pass : Setting("date_in_pass", "on"));
+        ApplyRendererSettings(options);
         SetVulkanThread((!options.vulkan_thread.empty() ? options.vulkan_thread : Setting("vulkan_thread", "on")) == "on");
         SetRenderQueue(!options.render_queue.empty() ? options.render_queue : Setting("render_queue", "batch"));
         SetRenderQueueFrames(u32(std::stoul(!options.render_queue_frames.empty() ? options.render_queue_frames
