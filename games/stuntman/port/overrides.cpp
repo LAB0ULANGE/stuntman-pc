@@ -26,6 +26,7 @@ void F_00251FE0(lifted::Context& c);
 void F_002521E0(lifted::Context& c);
 void F_00252208(lifted::Context& c);
 void F_001D0DA0(lifted::Context& c);
+void F_001D4FA8(lifted::Context& c);
 
 namespace {
 
@@ -247,9 +248,25 @@ void LightTable(lifted::Context& c) {
     }
 }
 
+// The picture's wait (0x001D4FA8): for the blank counter (0x00272D70) to be
+// N past the last picture's (0x00272D90), N the word 0x005C21B4 (2, from the
+// game's configuration table, written by 0x00165220). The main loop
+// (0x00119790) updates the game once per blank elapsed, at most 3 a picture,
+// so N sets the pictures a second, not the game's speed: frame_rate=50 makes
+// it 1 - a picture every blank of PAL's 50 (PeterDelta's "50 FPS" patch for
+// PCSX2 writes the same word).
+constexpr u32 kBlanksPerPicture = 0x005C21B4u;
+
+void PictureWait(lifted::Context& c) {
+    static const bool fifty = ps2host::Setting("frame_rate", "25") == "50";
+    if (fifty) ps2host::GuestMemory().Write(kBlanksPerPicture, 1, 4);
+    F_001D4FA8(c);
+}
+
 }  // namespace
 
 void RegisterGameOverrides() {
+    ps2host::Override(0x001D4FA8u, PictureWait, "the picture's wait: a picture every blank with frame_rate=50");
     ps2host::Override(0x001D0DA0u, LightTable, "the light table: shadows and ambient light from the PC settings");
     // ps2host::Override(0x00123456u, SomeHook, "what it does and why");
 
