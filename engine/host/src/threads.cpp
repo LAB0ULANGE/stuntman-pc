@@ -370,6 +370,29 @@ void StopTimer() {
 std::atomic<u64> g_blank_due_ns{0};
 const bool g_hitch_blanks = std::getenv("PS2HOST_HITCH") != nullptr;
 
+// PS2HOST_BLANK_LOG: each real-time blank as the timer marks it due and as
+// the EE takes it, on the steady clock in milliseconds (as --watch then
+// prints its calls): how late each came to the game, and in what bursts.
+// The due times wait in a ring, the timer writing and the EE reading.
+const bool g_blank_log = std::getenv("PS2HOST_BLANK_LOG") != nullptr;
+std::atomic<u64> g_blank_ring[16];
+std::atomic<u32> g_blank_ring_in{0}, g_blank_ring_out{0};
+double SteadyMs() {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+void LogBlankDue(double due_ms, u32 owed, bool lost) {
+    if (!lost) g_blank_ring[g_blank_ring_in.fetch_add(1) & 15].store(u64(due_ms * 1000.0));
+    std::fprintf(stderr, "[blank] due %.3f%s, %u owed\n", due_ms, lost ? " lost" : "", owed);
+}
+void LogBlankTaken(const Scheduler& s, u32 owed) {
+    const double now = SteadyMs();
+    double due = now;
+    if (g_blank_ring_out.load() != g_blank_ring_in.load())
+        due = double(g_blank_ring[g_blank_ring_out.fetch_add(1) & 15].load()) / 1000.0;
+    std::fprintf(stderr, "[blank] taken %.3f, frame %llu, %.1f ms late, %u more owed\n", now,
+                 (unsigned long long)(s.frames + 1), now - due, owed);
+}
+
 bool TakeVblank(Scheduler& s) {
     if (!s.vblank_due.exchange(false)) return false;
     if (g_hitch_blanks) {
@@ -384,7 +407,24 @@ bool TakeVblank(Scheduler& s) {
     while (owed && !s.vblank_owed.compare_exchange_weak(owed, owed - 1)) {
     }
     if (owed) s.vblank_due = true;
+    if (g_blank_log && s.realtime) LogBlankTaken(s, owed ? owed - 1 : 0);
     return true;
+}
+
+// A blank taken, with those owed behind it (SetLateBlanksTogether): on the
+// console the vertical blank interrupts the EE whatever it does, so a game
+// that reads its blank counter after a long picture finds it advanced by all
+// that passed. Delivered one loop head apart, the owed came to the game one
+// by one: its wait for 2 blanks (Stuntman's) ended on the second, the third
+// counted for the next picture, which then came at once - two pictures
+// 20-30 ms apart after each hitch, the game running ahead of real time.
+// Off by default: in Stuntman's stunt it changed little (game time over
+// 200 ms at most 1.20 of real time against 1.28, one run each).
+std::atomic<bool> g_late_blanks_together{false};
+void DeliverTakenBlank(Scheduler& s) {
+    DeliverFrame();
+    if (g_late_blanks_together.load(std::memory_order_relaxed))
+        while (TakeVblank(s)) DeliverFrame();
 }
 
 // Raises the vertical blank in real time: marks a frame due and spends the
@@ -486,13 +526,17 @@ void VblankTimer() {
             if (clock::now() >= next + period) next = clock::now() + period;   // a stall: start again from now
             if (g_hitch_blanks && !s.vblank_due.load())
                 g_blank_due_ns.store(ClockNs(), std::memory_order_relaxed);
+            const double due_ms = g_blank_log ? SteadyMs() : 0;
+            bool lost = false;
             if (s.vblank_due.exchange(true)) {
                 if (s.vblank_owed.load() < kOwedVblanks) s.vblank_owed.fetch_add(1);
                 else {
+                    lost = true;
                     g_lost_vblanks.fetch_add(1, std::memory_order_relaxed);
                     timeline::BlankLost();
                 }
             }
+            if (g_blank_log) LogBlankDue(due_ms, s.vblank_owed.load(), lost);
         }
         if (timer >= 0 && (!retrying || clock::now() >= timer_at)) s.timer_due = true;
         if (lifted::Context* c = s.running.load())
@@ -578,7 +622,7 @@ void LoopHead(lifted::Context& c, u32 address) {
     // In real time the timer may have spent the budget since the blank and
     // timers were looked at: its spend kept (VblankTimer).
     if (s.realtime && (s.vblank_due.load() || s.timer_due.load())) c.budget = 0;
-    if (frame) DeliverFrame();
+    if (frame) DeliverTakenBlank(s);
     if (timers) {
         DeliverTimers();
         DeliverAlarms();
@@ -857,6 +901,7 @@ void RunThreads(const lifted::Context& initial, u32 entry, s64 loop_budget) {
                 DeliverTimers();
                 DeliverAlarms();
                 if (!VblankReached()) continue;
+                DeliverFrame();
             } else if (s.realtime) {
                 // Every thread waits: so does the host, for the next vertical
                 // blank or timer interrupt - the game runs at its own pace.
@@ -884,8 +929,10 @@ void RunThreads(const lifted::Context& initial, u32 entry, s64 loop_budget) {
                     DeliverAlarms();
                 }
                 if (!TakeVblank(s)) continue;
+                DeliverTakenBlank(s);
+            } else {
+                DeliverFrame();
             }
-            DeliverFrame();
             if (++idle > kIdleFrames) {
                 std::string states;
                 for (auto& [id, t] : s.threads)
@@ -903,7 +950,7 @@ void RunThreads(const lifted::Context& initial, u32 entry, s64 loop_budget) {
         SwitchToFiber(next->fiber);
         s.running = nullptr;
         s.current = nullptr;
-        if (TakeVblank(s)) DeliverFrame();
+        if (TakeVblank(s)) DeliverTakenBlank(s);
         if (s.timer_due.exchange(false)) {
             DeliverTimers();
             DeliverAlarms();
@@ -1183,6 +1230,7 @@ void SetFastForward(unsigned factor) {
 unsigned FastForward() { return g_fast_forward.load(std::memory_order_relaxed); }
 u64 LastVblankNs() { return g_last_vblank_ns.load(std::memory_order_relaxed); }
 void SetPalTiming(bool on) { g_pal_timing = on; }
+void SetLateBlanksTogether(bool on) { g_late_blanks_together = on; }
 void VideoModeAsked(u32 mode) {
     // SetGsCrt's mode: 2 NTSC, 3 PAL (the vertical blanks of real time follow; a
     // virtual-time run keeps its own, the same in every run).

@@ -562,6 +562,11 @@ void SetAudioSteer(bool on);
    mode 3; VideoModeAsked), not NTSC's 59.94 always (the "pal_timing" setting,
    on by default; --pal-timing). A virtual-time run keeps 59.94. */
 void SetPalTiming(bool on);
+/* In real time, the vertical blanks owed to an EE that took one late are all
+   delivered at once, as the console's counter is found advanced by them
+   (the "late_blanks" setting: together, or apart - one a loop head, the
+   default; --late-blanks). A virtual-time run owes none. */
+void SetLateBlanksTogether(bool on);
 /* In real time, the IOP runs while the EE waits for the GS thread or the VIF1
    worker (IopWhileEeWaits, called in those waits; the "iop_while_waiting"
    setting, on by default; --iop-while-waiting on|off): a sound stream's

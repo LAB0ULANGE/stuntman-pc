@@ -142,6 +142,8 @@ struct Options {
     std::string iop_while_waiting;
     /* --pal-timing on|off: else the "pal_timing" setting's, on (SetPalTiming). */
     std::string pal_timing;
+    /* --late-blanks together|apart: else the "late_blanks" setting's, apart (SetLateBlanksTogether). */
+    std::string late_blanks;
     /* --audio-steer on|off: else the "audio_steer" setting's, on (SetAudioSteer). */
     std::string audio_steer;
     /* --render-queue-frames N: else the "render_queue_frames" setting's, 1 (SetRenderQueueFrames). */

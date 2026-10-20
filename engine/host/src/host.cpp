@@ -364,10 +364,17 @@ void Dispatch(lifted::Context& c, u32 address) {
         }
         throw;
     }
-    if (std::find(g_watch.begin(), g_watch.end(), address) != g_watch.end())
-        std::fprintf(stderr, "[watch] %s returned v0=%016llX f0=%08X s0=%08X s1=%08X sp=%08X\n",
+    if (std::find(g_watch.begin(), g_watch.end(), address) != g_watch.end()) {
+        // PS2HOST_BLANK_LOG: when, on the clock its blanks are logged on.
+        static const bool timed = std::getenv("PS2HOST_BLANK_LOG") != nullptr;
+        char at[40] = "";
+        if (timed)
+            std::snprintf(at, sizeof at, " at %.3f",
+                          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        std::fprintf(stderr, "[watch] %s returned v0=%016llX f0=%08X s0=%08X s1=%08X sp=%08X%s\n",
                      Describe(address).c_str(), (unsigned long long)c.r[2], c.f[0],
-                     unsigned(c.r[16]), unsigned(c.r[17]), unsigned(c.r[29]));
+                     unsigned(c.r[16]), unsigned(c.r[17]), unsigned(c.r[29]), at);
+    }
 }
 
 namespace {
@@ -606,6 +613,7 @@ int Run(const Options& options) {
     InstallCrashReport();
     SetVif1Worker(!options.vif1_sync);
     SetPalTiming((!options.pal_timing.empty() ? options.pal_timing : Setting("pal_timing", "on")) == "on");
+    SetLateBlanksTogether((!options.late_blanks.empty() ? options.late_blanks : Setting("late_blanks", "apart")) == "together");
     SetIopWhileWaiting((!options.iop_while_waiting.empty() ? options.iop_while_waiting
                                                            : Setting("iop_while_waiting", "on")) == "on");
     SetVif1FramesBehind(std::stoi(!options.vif1_frames_behind.empty() ? options.vif1_frames_behind
@@ -820,6 +828,7 @@ int Main(int argc, char** argv) {
         else if (arg == "--render-queue-frames" && i + 1 < argc) options.render_queue_frames = argv[++i];
         else if (arg == "--audio-steer" && i + 1 < argc) options.audio_steer = argv[++i];
         else if (arg == "--pal-timing" && i + 1 < argc) options.pal_timing = argv[++i];
+        else if (arg == "--late-blanks" && i + 1 < argc) options.late_blanks = argv[++i];
         else if (arg == "--iop-while-waiting" && i + 1 < argc) options.iop_while_waiting = argv[++i];
         else if (arg == "--vu-fast") options.vu_fast = true;
         else if (arg == "--memcard" && i + 1 < argc) options.memcard = argv[++i];
