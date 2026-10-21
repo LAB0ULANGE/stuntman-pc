@@ -90,7 +90,7 @@ def main(argv=None) -> int:
         if line.startswith("time:") or line.startswith("gpu: "):
             print(line)
     for line in result.stderr.splitlines():
-        if line.startswith("[frames]"):
+        if line.startswith("[frames]") or line.startswith(("[ps2gpu] a batch was dropped", "[ps2gpu] out of resources")):
             print(line)
     print("run: %.0f s" % elapsed)
 

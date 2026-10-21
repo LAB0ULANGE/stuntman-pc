@@ -1478,13 +1478,23 @@ void VulkanGsRenderer::DepthIn(VkCommandBuffer cmd, const SwizzleParams& params,
     g_.Mark(cmd, kProfSwizzle);
 }
 
+/* A resource the renderer could not have (a descriptor set, an image): what
+   used it is drawn without, so said (the first five times). */
+void OutOf(const char* what) {
+    static int complaints = 0;
+    if (complaints < 5) {
+        ++complaints;
+        std::fprintf(stderr, "[ps2gpu] out of resources: %s\n", what);
+    }
+}
+
 VkDescriptorSet VulkanGsRenderer::StorageSet(Image& image) {
     if (image.storage) return image.storage;
     VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     ai.descriptorPool = storage_pool_;
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &image_set_layout_;
-    if (vkAllocateDescriptorSets(g_.device, &ai, &image.storage) != VK_SUCCESS) return VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(g_.device, &ai, &image.storage) != VK_SUCCESS) return OutOf("a storage set"), VK_NULL_HANDLE;
     VkDescriptorImageInfo info{VK_NULL_HANDLE, image.view, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = image.storage;
@@ -1502,7 +1512,7 @@ VkDescriptorSet VulkanGsRenderer::TextureStorageSet(Image& image) {
     ai.descriptorPool = texture_storage_pool_;
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &image_set_layout_;
-    if (vkAllocateDescriptorSets(g_.device, &ai, &image.storage) != VK_SUCCESS) return image.storage = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(g_.device, &ai, &image.storage) != VK_SUCCESS) return OutOf("a texture's storage set"), image.storage = VK_NULL_HANDLE;
     VkDescriptorImageInfo info{VK_NULL_HANDLE, image.view, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = image.storage;
@@ -1937,7 +1947,7 @@ VkDescriptorSet VulkanGsRenderer::SampledSet(Image& image) {
     ai.descriptorPool = pool_;
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &set_layout_;
-    if (vkAllocateDescriptorSets(g_.device, &ai, &image.sampled) != VK_SUCCESS) return VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(g_.device, &ai, &image.sampled) != VK_SUCCESS) return OutOf("a sampled image's set"), VK_NULL_HANDLE;
     VkDescriptorImageInfo info{samplers_[3], image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = image.sampled;
@@ -2262,7 +2272,7 @@ VkDescriptorSet VulkanGsRenderer::SetFor(Texture& texture, int sampler) {
     ai.descriptorPool = pool_;
     ai.descriptorSetCount = 1;
     ai.pSetLayouts = &set_layout_;
-    if (vkAllocateDescriptorSets(g_.device, &ai, &set) != VK_SUCCESS) return VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(g_.device, &ai, &set) != VK_SUCCESS) return OutOf("a texture's set"), VK_NULL_HANDLE;
     VkDescriptorImageInfo info{samplers_[sampler], texture.image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     write.dstSet = set;
@@ -2422,7 +2432,7 @@ Texture* VulkanGsRenderer::TextureImage(std::uint64_t key, std::uint32_t width, 
         if (!MakeImage(texture.image, width, height,
                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                            VK_IMAGE_USAGE_STORAGE_BIT))
-            return nullptr;
+            return OutOf("a texture's image"), nullptr;
     }
     return &texture;
 }
