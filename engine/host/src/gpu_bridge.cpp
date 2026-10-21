@@ -181,6 +181,7 @@ struct Cached {
     u64 decoded_serial = 0;         // Bridge::serial when decoded
     u64 content = 0;                // a hash of its blocks when decoded
     bool decoded = false;
+    u64 shown_key = 0;              // texture_reuse: the image of its content drawn instead (0: its own)
     // The images whose blocks it can share (all they could ever cover), as of
     // `owned_seen` images: images are only ever added, and live as long as
     // the bridge.
@@ -232,6 +233,20 @@ struct Bridge {
     bool newer_list = true;
     std::unordered_map<u64, Cached> textures;
     std::list<u64> texture_lru;     // most recent first
+    // texture_reuse: images decoded once for each content (CachedTexture), by
+    // the texture's key and its blocks' hash; the least recently drawn go.
+    // At most content_budget bytes of them (PS2HOST_TEXTURE_REUSE_MB, 256 MB):
+    // the movies' frames, never seen again, filled the GPU's memory beside
+    // the 4,096 textures - images no longer made, everything after black.
+    struct ContentImage {
+        u64 renderer_key = 0;
+        u64 bytes = 0;
+        std::list<u64>::iterator lru;
+    };
+    std::unordered_map<u64, ContentImage> content_images;
+    std::list<u64> content_lru;
+    u64 content_bytes = 0;
+    u64 content_reused = 0;
     // The textures over each page (32 blocks) of local memory, for what a
     // write there invalidates: scanning all 2,048 on every write was 3% of a
     // race. Elements of `textures` stay put until erased.
@@ -934,6 +949,33 @@ u64 ClutHash(const Bridge& b, u32 psm, u32 csa) {
     return hash;
 }
 
+/* texture_reuse: CLUT loads and textures over GPU drawing told apart by the
+   blocks they read; textures decoded once for each content (CachedTexture). */
+bool g_texture_reuse = false;
+// Its parts (PS2HOST_TEXTURE_REUSE_PARTS, all by default): 1 the CLUT's
+// blocks, 2 the texels sampled, 4 an image for each content.
+unsigned g_texture_reuse_parts = 7;
+// The texture just looked up (CachedTexture) is the blocks its primitive
+// reads: the next primitive, reading others, may not take it on the fast path.
+bool g_texture_narrowed = false;
+
+/* The blocks the texels [x0, x1) x [y0, y1) of a buffer at BP, BW wide, lie
+   in: from the first to past the last. */
+void BlockSpan(u32 bp, u32 bw, u32 psm, u32 x0, u32 x1, u32 y0, u32 y1, u32* begin, u32* end) {
+    const u32 bits = PixelBits(psm);
+    const u32 block_w = bits == 4 ? 32 : bits == 32 ? 8 : 16, block_h = bits == 32 || bits == 16 ? 8 : 16;
+    u32 lo = ~0u, hi = 0;
+    for (u32 y = y0; y < y1; y = (y / block_h + 1) * block_h)
+        for (u32 x = x0; x < x1; x = (x / block_w + 1) * block_w) {
+            u32 nibble;
+            const u32 block = gs::Memory::Address(bp, std::max(1u, bw), x, y, psm, &nibble) / 256;
+            lo = std::min(lo, block);
+            hi = std::max(hi, block + 1);
+        }
+    *begin = lo == ~0u ? bp : lo;
+    *end = lo == ~0u ? bp : hi;
+}
+
 /* A CLUT load (on_clut_load): from the GPU's copy of local memory when the
    GPU holds its blocks newer - the race's crash and glow scenes load CLUTs
    from images just drawn, and bringing those back waited ~8 ms each - else
@@ -946,7 +988,15 @@ bool LoadClut(Bridge& b, u64 tex0, u64 texa) {
     const bool csm2 = Bits(tex0, 55, 1);
     const u32 csa = csm2 ? 0 : Bits(tex0, 56, 5);
     const u32 rows = ClutRowsOf(psm, csa);
-    if (csm2 || !GpuHolds(b, cbp, cbp + 8)) {
+    // The blocks it is read from (texture_reuse), not eight from CBP: Stuntman
+    // sends each 256-colour CLUT (four blocks) after its shadows were drawn
+    // over the four after, which kept every CLUT load the GPU's.
+    u32 clut_begin = cbp, clut_end = cbp + 8;
+    if (g_texture_reuse && (g_texture_reuse_parts & 1)) {
+        const bool eight = psm == gs::PSMT8 || psm == gs::PSMT8H;
+        BlockSpan(cbp, 1, cpsm == 0 ? gs::PSMCT32 : cpsm, 0, eight ? 16 : 8, 0, eight ? 16 : 2, &clut_begin, &clut_end);
+    }
+    if (csm2 || !GpuHolds(b, clut_begin, clut_end)) {
         b.clut_cpu |= rows;
         b.clut_gpu &= ~rows;
         return false;
@@ -1062,7 +1112,41 @@ bool Replace(Bridge& b, Cached& t) {
     return true;
 }
 
-u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
+/* The texels [x0, x1) x [y0, y1) of a TW x TH texture a primitive can read, by
+   its texture coordinates (as SampledPages): a texel more each side for
+   bilinear filtering, the whole span where REPEAT wraps; false where not
+   known (the region modes, a vertex with Q not above 0). */
+bool SampledTexels(u64 clamp, u32 tw, u32 th, const ps2gpu::GsVertex* v, std::size_t n, u32* x0, u32* x1, u32* y0,
+                   u32* y1) {
+    const u32 wms = u32(clamp & 3), wmt = u32(clamp >> 2 & 3);
+    if (wms > 1 || wmt > 1 || !n) return false;
+    float s0 = 0, s1 = 0, t0 = 0, t1 = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (!(v[i].q > 0)) return false;
+        const float s = v[i].s / v[i].q, t = v[i].t / v[i].q;
+        if (!std::isfinite(s) || !std::isfinite(t)) return false;
+        if (i == 0 || s < s0) s0 = s;
+        if (i == 0 || s > s1) s1 = s;
+        if (i == 0 || t < t0) t0 = t;
+        if (i == 0 || t > t1) t1 = t;
+    }
+    const auto span = [](float c0, float c1, u32 size, u32 mode, u32* lo, u32* hi) {
+        const float a = std::floor(c0 * float(size)) - 1, b = std::ceil(c1 * float(size)) + 1;
+        if (mode == 0 && (a < 0 || b > float(size))) {
+            *lo = 0;
+            *hi = size;
+            return;
+        }
+        *lo = u32(std::clamp(a, 0.0f, float(size - 1)));
+        *hi = u32(std::clamp(b, float(*lo + 1), float(size)));
+    };
+    span(s0, s1, tw, wms, x0, x1);
+    span(t0, t1, th, wmt, y0, y1);
+    return true;
+}
+
+u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th, const ps2gpu::GsVertex* v = nullptr,
+                  std::size_t count = 0) {
     const u32 tbp = Bits(c.tex0, 0, 14), tbw = Bits(c.tex0, 14, 6), psm = Bits(c.tex0, 20, 6);
     // What decides the decoded texels: where and how it is stored (TBP0, TBW,
     // PSM, TW, TH), how a region mode wraps it (CLAMP), TEXA, the CLUT's
@@ -1075,21 +1159,38 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
     gs::MipLevels mips = gs::LevelsOf(c);
     if (!gs::MipMode(c)) mips.count = 1;        // levels never read: not decoded
     for (u32 n = 1; n < mips.count; ++n) key ^= (u64(mips.tbp[n]) << 6 | mips.tbw[n]) * (0x9E3779B97F4A7C15ull + n);
+    // Every level's blocks (they follow level 0, as a rule).
+    u32 begin = 16384, end = 0;
+    for (u32 n = 0; n < mips.count; ++n) {
+        const u32 h = std::max(1u, th >> n);
+        begin = std::min(begin, mips.tbp[n]);
+        end = std::max(end, std::min(16384u, mips.tbp[n] + std::max(1u, std::max(1u, mips.tbw[n]) * 64 * h *
+                                                                            PixelBits(psm) / 8 / 256 + 32)));
+    }
+    // texture_reuse, where the GPU holds some of those blocks newer: only
+    // the blocks the primitive reads, a texture of its own (Stuntman sends
+    // a 64x64 corner of each 256x256 texture, its other blocks drawn over).
+    if (g_texture_reuse && (g_texture_reuse_parts & 2) && v && mips.count == 1 && GpuHolds(b, begin, end)) {
+        u32 x0, x1, y0, y1;
+        if (SampledTexels(c.clamp, tw, th, v, count, &x0, &x1, &y0, &y1) && x1 <= std::max(1u, tbw) * 64) {
+            u32 used_begin, used_end;
+            BlockSpan(tbp, tbw, psm, x0, x1, y0, y1, &used_begin, &used_end);
+            if (used_begin < used_end && (used_begin > begin || used_end < end)) {
+                begin = used_begin;
+                end = used_end;
+                key ^= (u64(begin) << 16 | end) * 0xD6E8FEB86659FD93ull;
+                g_texture_narrowed = true;
+            }
+        }
+    }
     Cached& t = b.textures[key];
     if (!t.renderer_key) {
         t.renderer_key = b.next_texture++;
         b.texture_lru.push_front(key);
         t.lru = b.texture_lru.begin();
         ++g_mutations;
-        // Every level's blocks (they follow level 0, as a rule).
-        t.begin = 16384;
-        t.end = 0;
-        for (u32 n = 0; n < mips.count; ++n) {
-            const u32 h = std::max(1u, th >> n);
-            t.begin = std::min(t.begin, mips.tbp[n]);
-            t.end = std::max(t.end, std::min(16384u, mips.tbp[n] + std::max(1u, std::max(1u, mips.tbw[n]) * 64 * h *
-                                                                                    PixelBits(psm) / 8 / 256 + 32)));
-        }
+        t.begin = begin;
+        t.end = end;
         b.IndexTexture(&t, true);
     } else {
         b.texture_lru.splice(b.texture_lru.begin(), b.texture_lru, t.lru);
@@ -1118,7 +1219,7 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
     // Decoded on the GPU, from its copy of local memory and its CLUT, the
     // CPU's newer blocks and CLUT rows sent over first.
     bool gpu_holds_now = false;
-    auto gpu_decode = [&] {
+    auto gpu_decode = [&](u64 into) {
         ForNewer(b, [&](Owned& o) {
             if (o.dirty_begin < t.end && t.begin < o.dirty_end) WriteBack(b, o);
         });
@@ -1154,7 +1255,7 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
             b.clut_gpu |= b.clut_cpu;
         }
         ++g_mutations;
-        b.renderer->TextureFromMemory(t.renderer_key, d);
+        b.renderer->TextureFromMemory(into, d);
         // PS2HOST_GPU_TEXDUMP=TBP (hex): each decode of a texture there, as the
         // GPU has it, to gpu_tex_<n>_<primitive>.bmp (the CPU's beside it as
         // cpu_tex_<n>.bmp) - what a draw sampled, against the GS model.
@@ -1165,7 +1266,7 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
             if (tbp == u32(std::strtoul(want, nullptr, 16)) && dumped < 64) {
                 std::vector<u32> pixels;
                 u32 w = 0, h = 0;
-                if (b.renderer->ReadTexture(t.renderer_key, &pixels, &w, &h)) {
+                if (b.renderer->ReadTexture(into, &pixels, &w, &h)) {
                     const std::string n = std::to_string(dumped) + "_" + std::to_string(gs::TheGs().primitives());
                     if (std::FILE* raw = std::fopen(("gpu_tex_" + n + ".rgba").c_str(), "wb")) { std::fwrite(pixels.data(), 4, pixels.size(), raw); std::fclose(raw); }
                     std::fprintf(stderr, "[texdump] %s: %ux%u psm %02X, %s\n", n.c_str(), unsigned(w), unsigned(h),
@@ -1190,7 +1291,8 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
         Timed timed(Section::GpuSync);
         const TimelineStep step("sync: a texture decoded on the GPU");
         gpu_holds_now = true;
-        gpu_decode();
+        gpu_decode(t.renderer_key);
+        t.shown_key = 0;
         t.replaced = t.pack_pending = false;
         t.valid = true;
         t.decoded = false;              // the CPU's copy was not read: no hash to compare
@@ -1210,12 +1312,54 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
         // Something else: decoded on the GPU all the same (texel by texel on
         // the CPU, the race's streamed textures were a twelfth of the GS
         // thread), the hash kept to compare the next time.
-        if (!t.decoded || content != t.content) {
+        if ((!t.decoded || content != t.content) && g_texture_reuse && (g_texture_reuse_parts & 4) && !pack && mips.count == 1) {
+            // texture_reuse: an image for each content, decoded once and
+            // never again into (Stuntman streams some sixty textures a
+            // picture through the same blocks, the same ones each picture).
+            const u64 content_key = key ^ (content * 0x9FB21C651E98DF25ull);
+            const auto found = b.content_images.find(content_key);
+            if (found != b.content_images.end()) {
+                b.content_lru.splice(b.content_lru.begin(), b.content_lru, found->second.lru);
+                t.shown_key = found->second.renderer_key;
+                ++b.content_reused;
+                t.decoded_serial = b.serial;
+                ++g_mutations;
+            } else {
+                const u64 image = b.next_texture++;
+                gpu_decode(image);
+                b.content_lru.push_front(content_key);
+                const u64 bytes = u64(tw) * th * 4;
+                b.content_images[content_key] = {image, bytes, b.content_lru.begin()};
+                b.content_bytes += bytes;
+                t.shown_key = image;
+                ++b.decodes;
+                static const u64 budget = u64(std::getenv("PS2HOST_TEXTURE_REUSE_MB")
+                                                  ? std::strtoul(std::getenv("PS2HOST_TEXTURE_REUSE_MB"), nullptr, 10)
+                                                  : 256) << 20;
+                while (b.content_bytes > budget && b.content_images.size() > 1) {
+                    const u64 old = b.content_lru.back();
+                    b.content_lru.pop_back();
+                    const auto gone = b.content_images.find(old);
+                    if (gone == b.content_images.end()) continue;
+                    // (an entry still showing it decodes again: its content
+                    // looked up anew)
+                    for (auto& [tkey, other] : b.textures)
+                        if (other.shown_key == gone->second.renderer_key) other.shown_key = 0, other.valid = other.decoded = false;
+                    b.renderer->ReleaseTexture(gone->second.renderer_key);
+                    b.content_bytes -= gone->second.bytes;
+                    b.content_images.erase(gone);
+                    ++g_mutations;
+                }
+            }
             t.replaced = t.pack_pending = false;
+            t.content = content;
+        } else if (!t.decoded || content != t.content) {
+            t.replaced = t.pack_pending = false;
+            t.shown_key = 0;
             if (pack)
                 t.pack_name = texture_pack::NameOf(gs::TheGs().memory, c.tex0, c.clamp, texa,
                                                    gs::TheGs().Clut().data());
-            if (!pack || !Replace(b, t)) gpu_decode();
+            if (!pack || !Replace(b, t)) gpu_decode(t.renderer_key);
             t.content = content;
             ++b.decodes;
         } else {
@@ -1225,7 +1369,7 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th) {
         t.valid = true;
         t.decoded = true;
     }
-    const u64 renderer_key = t.renderer_key;
+    const u64 renderer_key = t.shown_key ? t.shown_key : t.renderer_key;
     // Keep the cache bounded: the least recently used go (4,096: a race keeps
     // over 2,048 about, and each one evicted came back decoded again).
     while (b.textures.size() > 4096) {
@@ -1346,6 +1490,7 @@ void OnDraw(const gs::Gs::DrawCall& call) {
     if (type == 7) return;
     if (!s.primary && type < 3) return;                 // the shadow compares what it has always drawn
     const gs::Context& c = *call.context;
+    g_texture_narrowed = false;
     ps2gpu::GsDrawState state;
     state.fbp = Bits(c.frame, 0, 9);
     state.fbw = std::max(1u, Bits(c.frame, 16, 6));
@@ -1505,7 +1650,7 @@ void OnDraw(const gs::Gs::DrawCall& call) {
         }
         if (!state.texture_target) {
             if (s.primary) {
-                state.texture = CachedTexture(s, c, call.texa, tw, th);
+                state.texture = CachedTexture(s, c, call.texa, tw, th, v, n);
             } else {
                 // Decoded again when the texture's registers change, local memory
                 // is uploaded into, or a draw since went into the texture's blocks.
@@ -1634,6 +1779,7 @@ void OnDraw(const gs::Gs::DrawCall& call) {
         // A target that samples itself (feedback) sees each primitive's
         // drawing in the next: those go the whole way.
         if (state.texture_target && tex_source == target) may = false;
+        if (g_texture_narrowed) may = false;
         if (may && state.textured && !state.texture_target) {
             const u32 tbp = Bits(c.tex0, 0, 14), tbw = Bits(c.tex0, 14, 6), tpsm = Bits(c.tex0, 20, 6);
             const u32 tend = std::min(16384u, tbp + std::max(1u, tbw * 64 * th * PixelBits(tpsm) / 8 / 256 + 32));
@@ -2140,6 +2286,13 @@ void SetTextureDecode(const std::string& mode) {
     if (mode == "linear") std::fprintf(stderr, "[gpu] textures decoded through the linear buffer\n");
 }
 
+void SetTextureReuse(bool on) {
+    g_texture_reuse = on;
+    if (const char* parts = std::getenv("PS2HOST_TEXTURE_REUSE_PARTS")) g_texture_reuse_parts = unsigned(std::atoi(parts));
+    gs::TheGs().exact_clut_blocks = on && (g_texture_reuse_parts & 1);
+    if (on) std::fprintf(stderr, "[gpu] texture_reuse: CLUTs and textures by the blocks they read, decoded once a content\n");
+}
+
 void SetTextureCache(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->texture_cache = mode == "off"     ? Bridge::TextureCache::kOff
@@ -2317,7 +2470,7 @@ std::string GpuShadowSummary() {
     if (g_bridge->primary) {
         std::snprintf(text, sizeof text,
                       "gpu: %llu images into GPU local memory, %llu out of it; %llu KB to the CPU, %llu KB"
-                      " from it; %llu textures decoded (%llu more found unchanged), %llu on the GPU;"
+                      " from it; %llu textures decoded (%llu more found unchanged, %llu found decoded before), %llu on the GPU;"
                       " %llu CLUTs loaded on the GPU",
                       static_cast<unsigned long long>(g_bridge->write_backs),
                       static_cast<unsigned long long>(g_bridge->reloads),
@@ -2325,6 +2478,7 @@ std::string GpuShadowSummary() {
                       static_cast<unsigned long long>(g_bridge->uploads / 4),
                       static_cast<unsigned long long>(g_bridge->decodes),
                       static_cast<unsigned long long>(g_bridge->unchanged),
+                      static_cast<unsigned long long>(g_bridge->content_reused),
                       static_cast<unsigned long long>(g_bridge->gpu_decodes),
                       static_cast<unsigned long long>(g_bridge->gpu_clut_loads));
         std::string summary = std::string(text) + "\ngpu: " + ps2gpu::SubmitStats();

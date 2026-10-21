@@ -44,6 +44,7 @@ void ApplyRendererSettings(const Options& options) {
     SetBatchOverlap(!options.batch_overlap.empty() ? options.batch_overlap : Setting("batch_overlap", "exact"));
     SetMemoryWrites(Setting("memory_writes", "batch"));
     SetTextureDecode(Setting("texture_decode", "direct"));
+    SetTextureReuse(SettingOn("texture_reuse", std::getenv("PS2HOST_TEXTURE_REUSE") != nullptr));
     SetNewerList((!options.newer_list.empty() ? options.newer_list : Setting("newer_list", "on")) != "off");
     SetOwnedIndex((!options.owned_index.empty() ? options.owned_index : Setting("owned_index", "on")) != "off");
     SetColclampWrap(Setting("colclamp_wrap", "fast"));

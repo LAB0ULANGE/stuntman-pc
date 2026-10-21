@@ -457,9 +457,24 @@ void Gs::LoadClut(u64 tex0) {
     Finish();                                   // the CLUT may have been drawn
     ++clut_loads_;
     if (on_clut_load && on_clut_load(tex0, texa_)) return;
-    if (on_memory) on_memory(cbp, cbp + 8, false);
-    auto clut = std::make_shared<std::array<u32, 256>>(*clut_);
     const bool eight = psm == PSMT8 || psm == PSMT8H;
+    if (on_memory) {
+        u32 begin = cbp, end = cbp + 8;
+        if (exact_clut_blocks && !Bits(tex0, 55, 1)) {
+            begin = ~0u;
+            end = 0;
+            const u32 w = eight ? 16 : 8, h = eight ? 16 : 2;
+            for (u32 y = 0; y < h; ++y)
+                for (u32 x = 0; x < w; ++x) {
+                    u32 nibble;
+                    const u32 block = Memory::Address(cbp, 1, x, y, cpsm, &nibble) / 256;
+                    begin = std::min(begin, block);
+                    end = std::max(end, block + 1);
+                }
+        }
+        on_memory(begin, end, false);
+    }
+    auto clut = std::make_shared<std::array<u32, 256>>(*clut_);
     const u32 count = eight ? 256 : 16;
     // CSM2 (TEX0 bit 55): the CLUT is one row of a CT16 buffer, entry i at
     // (TEXCLUT COU * 16 + i, COV) in a buffer CBW wide - no swizzle, no CSA.

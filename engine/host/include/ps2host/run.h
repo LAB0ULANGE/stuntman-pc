@@ -235,6 +235,10 @@ void SetMemoryWrites(const std::string& mode);
    default) or through a linear buffer ("linear", as before): the
    "texture_decode" setting. */
 void SetTextureDecode(const std::string& mode);
+/* CLUT loads and textures where the GPU drew over some of their blocks told
+   apart by the blocks they read, and a texture's image kept for each content
+   it held, never decoded again (the "texture_reuse" setting). */
+void SetTextureReuse(bool on);
 /* The GPU images newer than local memory kept in a list (the "newer_list"
    setting, on by default; --newer-list on|off), not looked for among all. */
 void SetNewerList(bool on);
