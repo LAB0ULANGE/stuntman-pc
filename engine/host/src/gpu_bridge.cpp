@@ -2305,6 +2305,11 @@ void SetTextureReuse(bool on) {
     if (on) std::fprintf(stderr, "[gpu] texture_reuse: CLUTs and textures by the blocks they read, decoded once a content\n");
 }
 
+void SetBarriers(const std::string& mode) {
+    ps2gpu::SetBarrierDedupe(mode == "dedupe");
+    if (mode == "dedupe") std::fprintf(stderr, "[gpu] barriers=dedupe: a barrier with nothing since the last left out\n");
+}
+
 void SetTextureCache(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->texture_cache = mode == "off"     ? Bridge::TextureCache::kOff

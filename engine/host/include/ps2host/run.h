@@ -239,6 +239,9 @@ void SetTextureDecode(const std::string& mode);
    apart by the blocks they read, and a texture's image kept for each content
    it held, never decoded again (the "texture_reuse" setting). */
 void SetTextureReuse(bool on);
+/* The renderer's full memory barriers all kept ("all") or, one with nothing
+   recorded since the last, left out ("dedupe"): the "barriers" setting. */
+void SetBarriers(const std::string& mode);
 /* The GPU images newer than local memory kept in a list (the "newer_list"
    setting, on by default; --newer-list on|off), not looked for among all. */
 void SetNewerList(bool on);

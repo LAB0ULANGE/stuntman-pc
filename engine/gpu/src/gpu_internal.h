@@ -183,6 +183,7 @@ void VulkanGpu::RecordInPass(F&& record) {
         else begin_buffer(nullptr);
         open_ = true;
         ++recordings_;
+        ++g_cmd_work;
         if (timestamps_) {
             vkCmdResetQueryPool(cmd, timestamps_, 2 * std::uint32_t(current_), 2);
             vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestamps_, 2 * std::uint32_t(current_));

@@ -404,6 +404,9 @@ std::string SubmitStats();
 /* What went into the command buffers since the last call: barriers, layout
    transitions, compute dispatches, draws, rendering passes, feedback copies. */
 std::string RendererCounters();
+/* A full memory barrier with nothing recorded since the one before, in the
+   same command buffer, left out (true: the "barriers=dedupe" setting). */
+void SetBarrierDedupe(bool on);
 /* The GPU's time on the frames' command buffers, in all (nanoseconds; 0
    where the GPU keeps no time). */
 std::uint64_t GpuBusyNanoseconds();

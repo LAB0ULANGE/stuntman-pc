@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -127,14 +128,28 @@ void Transition(VkCommandBuffer cmd, Image& t, VkImageLayout to, VkAccessFlags d
     t.layout = to;
 }
 
+/* barriers=dedupe (SetBarrierDedupe): a barrier with nothing recorded since
+   the last left out - a write-back's after and a reload's before meet
+   back to back, some 3,000 full barriers a picture in Stuntman's stunt. */
+std::atomic<bool> g_barrier_dedupe{false};
+std::uint64_t g_barriers_left_out = 0;
+
 /* Everything written so far, visible to everything after. */
 void MemoryBarrier(VkCommandBuffer cmd) {
+    static thread_local VkCommandBuffer last_cmd = VK_NULL_HANDLE;
+    static thread_local std::uint64_t last_work = ~0ull;
+    if (g_barrier_dedupe.load(std::memory_order_relaxed) && cmd == last_cmd && g_cmd_work == last_work) {
+        ++g_barriers_left_out;
+        return;
+    }
     ++g_barriers;
     VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &b, 0,
                          nullptr, 0, nullptr);
+    last_cmd = cmd;
+    last_work = g_cmd_work;         // (this barrier counted itself)
 }
 
 /* decode.comp's push constants: GsTextureDecode without the CLUT. */
@@ -3643,15 +3658,18 @@ std::string GpuProfileReport() {
     return out;
 }
 
+void SetBarrierDedupe(bool on) { g_barrier_dedupe = on; }
+
 std::string RendererCounters() {
-    static std::uint64_t last[6] = {};
-    const std::uint64_t now[6] = {g_barriers, g_transitions, g_dispatches, g_draws, g_passes, g_feedback};
-    char text[200];
-    std::snprintf(text, sizeof text, "%llu barriers, %llu transitions, %llu dispatches, %llu draws, %llu passes, %llu feedback copies",
-                  (unsigned long long)(now[0] - last[0]), (unsigned long long)(now[1] - last[1]),
+    static std::uint64_t last[7] = {};
+    const std::uint64_t now[7] = {g_barriers, g_transitions, g_dispatches, g_draws, g_passes, g_feedback, g_barriers_left_out};
+    char text[240];
+    std::snprintf(text, sizeof text, "%llu barriers (%llu left out), %llu transitions, %llu dispatches, %llu draws, %llu passes, %llu feedback copies",
+                  (unsigned long long)(now[0] - last[0]), (unsigned long long)(now[6] - last[6]),
+                  (unsigned long long)(now[1] - last[1]),
                   (unsigned long long)(now[2] - last[2]), (unsigned long long)(now[3] - last[3]),
                   (unsigned long long)(now[4] - last[4]), (unsigned long long)(now[5] - last[5]));
-    for (int i = 0; i < 6; ++i) last[i] = now[i];
+    for (int i = 0; i < 7; ++i) last[i] = now[i];
     std::string out = text;
     if (!g_breaks.empty()) {
         std::vector<std::pair<std::uint64_t, std::string>> by;

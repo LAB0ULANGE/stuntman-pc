@@ -17,6 +17,12 @@
 #ifndef PS2GPU_COMMAND_STREAM_H
 #define PS2GPU_COMMAND_STREAM_H
 
+/* Commands that read or write memory recorded on this thread (draws,
+   dispatches, copies, passes, barriers) and command buffers begun: a
+   memory barrier with none since the last has nothing to order
+   (MemoryBarrier, barriers=dedupe). */
+inline thread_local std::uint64_t g_cmd_work = 0;
+
 class CommandStream {
 public:
     explicit CommandStream(const VkCommandBuffer* owned, int count) {
@@ -226,11 +232,13 @@ inline void vkCmdSetScissor(VkCommandBuffer c, std::uint32_t first, std::uint32_
 }
 inline void vkCmdDraw(VkCommandBuffer c, std::uint32_t vertices, std::uint32_t instances, std::uint32_t first,
                       std::uint32_t first_instance) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c))
         return s->Add([=](void*) { ::vkCmdDraw(c, vertices, instances, first, first_instance); });
     ::vkCmdDraw(c, vertices, instances, first, first_instance);
 }
 inline void vkCmdDispatch(VkCommandBuffer c, std::uint32_t x, std::uint32_t y, std::uint32_t z) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c)) return s->Add([=](void*) { ::vkCmdDispatch(c, x, y, z); });
     ::vkCmdDispatch(c, x, y, z);
 }
@@ -275,10 +283,12 @@ inline void vkCmdSetStencilReference(VkCommandBuffer c, VkStencilFaceFlags faces
     ::vkCmdSetStencilReference(c, faces, value);
 }
 inline void vkCmdEndRendering(VkCommandBuffer c) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c)) return s->Add([=](void*) { ::vkCmdEndRendering(c); });
     ::vkCmdEndRendering(c);
 }
 inline void vkCmdBeginRendering(VkCommandBuffer c, const VkRenderingInfo* info) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c)) {
         // The info and its attachments, the pointers made again on the thread.
         struct Copy {
@@ -310,6 +320,7 @@ inline void vkCmdPipelineBarrier(VkCommandBuffer c, VkPipelineStageFlags src, Vk
                                  VkDependencyFlags flags, std::uint32_t memory_count, const VkMemoryBarrier* memory,
                                  std::uint32_t buffer_count, const VkBufferMemoryBarrier* buffers,
                                  std::uint32_t image_count, const VkImageMemoryBarrier* images) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c)) {
         struct Copy {
             VkMemoryBarrier memory[4];
@@ -334,6 +345,7 @@ inline void vkCmdPipelineBarrier(VkCommandBuffer c, VkPipelineStageFlags src, Vk
 }
 inline void vkCmdCopyBufferToImage(VkCommandBuffer c, VkBuffer buffer, VkImage image, VkImageLayout layout,
                                    std::uint32_t count, const VkBufferImageCopy* regions) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c))
         return s->Add(
             [=](void* p) {
@@ -344,6 +356,7 @@ inline void vkCmdCopyBufferToImage(VkCommandBuffer c, VkBuffer buffer, VkImage i
 }
 inline void vkCmdCopyImageToBuffer(VkCommandBuffer c, VkImage image, VkImageLayout layout, VkBuffer buffer,
                                    std::uint32_t count, const VkBufferImageCopy* regions) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c))
         return s->Add(
             [=](void* p) {
@@ -354,6 +367,7 @@ inline void vkCmdCopyImageToBuffer(VkCommandBuffer c, VkImage image, VkImageLayo
 }
 inline void vkCmdCopyImage(VkCommandBuffer c, VkImage src, VkImageLayout src_layout, VkImage dst,
                            VkImageLayout dst_layout, std::uint32_t count, const VkImageCopy* regions) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c))
         return s->Add(
             [=](void* p) {
@@ -364,6 +378,7 @@ inline void vkCmdCopyImage(VkCommandBuffer c, VkImage src, VkImageLayout src_lay
 }
 inline void vkCmdCopyBuffer(VkCommandBuffer c, VkBuffer src, VkBuffer dst, std::uint32_t count,
                             const VkBufferCopy* regions) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c))
         return s->Add([=](void* p) { ::vkCmdCopyBuffer(c, src, dst, count, static_cast<VkBufferCopy*>(p)); },
                       regions, count * sizeof(VkBufferCopy));
@@ -371,12 +386,14 @@ inline void vkCmdCopyBuffer(VkCommandBuffer c, VkBuffer src, VkBuffer dst, std::
 }
 inline void vkCmdUpdateBuffer(VkCommandBuffer c, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
                               const void* data) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c))
         return s->Add([=](void* p) { ::vkCmdUpdateBuffer(c, buffer, offset, size, p); }, data, std::size_t(size));
     ::vkCmdUpdateBuffer(c, buffer, offset, size, data);
 }
 inline void vkCmdFillBuffer(VkCommandBuffer c, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
                             std::uint32_t value) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c))
         return s->Add([=](void*) { ::vkCmdFillBuffer(c, buffer, offset, size, value); });
     ::vkCmdFillBuffer(c, buffer, offset, size, value);
@@ -384,6 +401,7 @@ inline void vkCmdFillBuffer(VkCommandBuffer c, VkBuffer buffer, VkDeviceSize off
 inline void vkCmdClearColorImage(VkCommandBuffer c, VkImage image, VkImageLayout layout,
                                  const VkClearColorValue* colour, std::uint32_t count,
                                  const VkImageSubresourceRange* ranges) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c)) {
         if (count <= 4) {
             struct Copy {
@@ -406,6 +424,7 @@ inline void vkCmdClearColorImage(VkCommandBuffer c, VkImage image, VkImageLayout
 inline void vkCmdClearDepthStencilImage(VkCommandBuffer c, VkImage image, VkImageLayout layout,
                                         const VkClearDepthStencilValue* value, std::uint32_t count,
                                         const VkImageSubresourceRange* ranges) {
+    ++g_cmd_work;
     if (CommandStream* s = StreamFor(c)) {
         if (count <= 4) {
             struct Copy {
