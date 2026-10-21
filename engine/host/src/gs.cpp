@@ -458,9 +458,38 @@ void Gs::LoadClut(u64 tex0) {
     ++clut_loads_;
     if (on_clut_load && on_clut_load(tex0, texa_)) return;
     const bool eight = psm == PSMT8 || psm == PSMT8H;
+    // CSM1 in a 32-, 24- or 16-bit CLUT: each entry's byte offset from CBP's
+    // (the 16x16 or 8x2 image lies in CBP's page), found once - Address for
+    // every entry was most of a load, and texture_reuse has ~1,000 a picture
+    // of Stuntman's stunt on the CPU.
+    struct Offsets {
+        u32 at[256];
+        u32 blocks;             // the blocks it spans from CBP's
+    };
+    static const auto offsets_for = [](u32 cpsm, bool eight_bit) {
+        Offsets o{};
+        u32 last = 0;
+        for (u32 i = 0; i < (eight_bit ? 256u : 16u); ++i) {
+            const u32 p = eight_bit ? (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1) : i;
+            const u32 x = eight_bit ? p % 16 : p % 8, y = eight_bit ? p / 16 : p / 8;
+            u32 nibble;
+            o.at[i] = Memory::Address(0, 1, x, y, cpsm, &nibble);
+            last = std::max(last, o.at[i] / 256);
+        }
+        o.blocks = last + 1;
+        return o;
+    };
+    static const Offsets kOffsets[3][2] = {
+        {offsets_for(PSMCT32, false), offsets_for(PSMCT32, true)},
+        {offsets_for(PSMCT16, false), offsets_for(PSMCT16, true)},
+        {offsets_for(PSMCT16S, false), offsets_for(PSMCT16S, true)}};
+    const int kind = cpsm == PSMCT32 || cpsm == PSMCT24 ? 0 : cpsm == PSMCT16 ? 1 : cpsm == PSMCT16S ? 2 : -1;
+    const Offsets* fast = !Bits(tex0, 55, 1) && kind >= 0 && cbp + 32 <= 16384 ? &kOffsets[kind][eight] : nullptr;
     if (on_memory) {
         u32 begin = cbp, end = cbp + 8;
-        if (exact_clut_blocks && !Bits(tex0, 55, 1)) {
+        if (exact_clut_blocks && fast) {
+            end = cbp + fast->blocks;
+        } else if (exact_clut_blocks && !Bits(tex0, 55, 1)) {
             begin = ~0u;
             end = 0;
             const u32 w = eight ? 16 : 8, h = eight ? 16 : 2;
@@ -480,7 +509,19 @@ void Gs::LoadClut(u64 tex0) {
     // (TEXCLUT COU * 16 + i, COV) in a buffer CBW wide - no swizzle, no CSA.
     const bool csm2 = Bits(tex0, 55, 1);
     const u32 cbw = csm2 ? std::max<u32>(1, Bits(texclut_, 0, 6)) : 1;
+    const u8* const bytes = memory.data();
     for (u32 i = 0; i < count; ++i) {
+        if (fast) {
+            const u8* p = bytes + std::size_t(cbp) * 256 + fast->at[i];
+            const u32 color = cpsm == PSMCT32   ? u32(p[0]) | u32(p[1]) << 8 | u32(p[2]) << 16 | u32(p[3]) << 24
+                              : cpsm == PSMCT24 ? [&] {
+                                    const u32 rgb = u32(p[0]) | u32(p[1]) << 8 | u32(p[2]) << 16;
+                                    return rgb | ((Bits(texa_, 15, 1) && !rgb) ? 0 : Bits(texa_, 0, 8)) << 24;
+                                }()
+                                                : From16(u32(p[0]) | u32(p[1]) << 8, texa_);
+            (*clut)[eight ? i : (csa * 16 + i) % 256] = color;
+            continue;
+        }
         // CSM1: an 8-bit CLUT is a 16x16 image with index bits 3 and 4 swapped;
         // a 4-bit one an 8x2 image.
         u32 x, y;

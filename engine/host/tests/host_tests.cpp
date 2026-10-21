@@ -585,6 +585,54 @@ void GsWeavesFieldsAsATelevision() {
           "GS: woven, a field on its parity's lines, the one before on the others");
 }
 
+// CSM1 CLUT loads (by each entry's offset from CBP's, found once) against the
+// entries read one by one through Memory::Read; and, with exact_clut_blocks,
+// the blocks said to on_memory against every entry's own.
+void GsLoadsCsm1ClutsAsReadOneByOne() {
+    using namespace ps2host::gs;
+    bool loads = true, blocks = true;
+    u32 seed = 12345;
+    for (u32 cpsm : {PSMCT32, PSMCT24, PSMCT16, PSMCT16S})
+        for (bool eight : {true, false})
+            for (u32 cbp : {0u, 0x2CC0u, 0x2CC4u, 0x3FE0u, 0x3FFCu})
+                for (u32 csa : {0u, 3u, 17u}) {
+                    Gs gs;
+                    gs.exact_clut_blocks = true;
+                    for (u32 i = 0; i < (4u << 20); i += 4) {
+                        seed = seed * 1103515245u + 12345u;
+                        std::memcpy(gs.memory.data() + i, &seed, 4);
+                    }
+                    u32 begin = 0, end = 0;
+                    gs.on_memory = [&](u32 b0, u32 b1, bool) { begin = b0, end = b1; };
+                    const u64 texa = 0x80u | (u64(0x40) << 32) | (1u << 15);
+                    gs.WriteRegister(0x3B, texa);
+                    const u32 psm = eight ? PSMT8 : PSMT4;
+                    gs.WriteRegister(0x06, (u64(psm) << 20) | (u64(cbp) << 37) | (u64(cpsm) << 51) |
+                                               (u64(eight ? 0 : csa) << 56) | (u64(1) << 61));
+                    u32 want_begin = ~0u, want_end = 0;
+                    for (u32 i = 0; i < (eight ? 256u : 16u); ++i) {
+                        const u32 p = eight ? (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1) : i;
+                        const u32 x = eight ? p % 16 : p % 8, y = eight ? p / 16 : p / 8;
+                        u32 nibble;
+                        const u32 block = Memory::Address(cbp, 1, x, y, cpsm, &nibble) / 256;
+                        want_begin = std::min(want_begin, block);
+                        want_end = std::max(want_end, block + 1);
+                        const u32 raw = gs.memory.Read(cbp, 1, x, y, cpsm);
+                        u32 want;
+                        if (cpsm == PSMCT32) want = raw;
+                        else if (cpsm == PSMCT24) want = (raw & 0xFFFFFF) | ((raw & 0xFFFFFF) ? 0x80u : 0u) << 24;
+                        else {          // (gs.cpp's From16)
+                            const u32 a = (raw & 0x8000) ? 0x40u : (!(raw & 0x7FFF) ? 0u : 0x80u);
+                            want = ((raw & 31) << 3) | (((raw >> 5) & 31) << 11) | (((raw >> 10) & 31) << 19) | a << 24;
+                        }
+                        loads = loads && gs.Clut()[eight ? i : (csa * 16 + i) % 256] == want;
+                    }
+                    blocks = blocks && begin == want_begin && end == want_end;
+                }
+    Check(loads, "CSM1 CLUTs (32/24/16/16S-bit, 8- and 4-bit) load as their entries read one by one");
+    Check(blocks, "an exact CLUT load says the blocks its entries lie in");
+}
+
 // PATH3 held by MSKPATH3: an unmask lets one EOP-ended group of packets go,
 // as Burnout 3's texture uploads need (one group per window, five a picture).
 void GsLoadsACsm2Clut() {
@@ -2640,6 +2688,7 @@ int main() {
     GsWeavesFieldsAsATelevision();
     GsFogsTowardsFogcol();
     GsLoadsACsm2Clut();
+    GsLoadsCsm1ClutsAsReadOneByOne();
     Path3GoesOneGroupPerWindow();
     GsKeepsAFlatDepthExact();
     GsFillsTopLeft();
