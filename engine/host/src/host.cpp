@@ -815,6 +815,7 @@ int Main(int argc, char** argv) {
             options.vu_snapshot_count = unsigned(std::stoul(argv[++i]));
         }
         else if (arg == "--vu-bench" && i + 1 < argc) options.vu_bench = argv[++i];
+        else if (arg == "--vu-check" && i + 1 < argc) options.vu_check = argv[++i];
         else if (arg == "--gs-replay" && i + 2 < argc) {
             const std::string file = argv[++i], out = argv[++i];
             return GsReplay(file, out);
@@ -892,6 +893,7 @@ int Main(int argc, char** argv) {
             return 64;
         }
     }
+    if (!options.vu_check.empty()) return Vu::Check(options.vu_check);
     if (!options.vu_bench.empty()) {
         // With --sample, a hundred passes under the sampler and its report.
         if (options.sample) {

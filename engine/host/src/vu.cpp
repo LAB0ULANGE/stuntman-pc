@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <unordered_map>
 #include <xmmintrin.h>
 #include <unordered_set>
@@ -798,6 +799,74 @@ int Vu::Bench(const std::string& path, int passes, bool fast) {
                 runs.size(), (unsigned long long)pairs, best * 1000, pairs ? best * 1e9 / double(pairs) : 0.0,
                 (unsigned long long)hash);
     return 0;
+}
+
+int Vu::Check(const std::string& path) {
+    std::FILE* in = std::fopen(path.c_str(), "rb");
+    if (!in) {
+        std::fprintf(stderr, "vu: cannot read %s\n", path.c_str());
+        return 1;
+    }
+    Snapshot s{};
+    std::vector<std::uint8_t> micro(16384), data(16384);
+    u64 runs = 0, pairs = 0, compiled = 0, compiled_fast = 0, exact_wrong = 0, fast_wrong = 0, fast_flags = 0;
+    while (std::fread(&s, sizeof s, 1, in) == 1 && std::fread(micro.data(), 1, 16384, in) == 16384 &&
+           std::fread(data.data(), 1, 16384, in) == 16384) {
+        // Each run from its snapshot on a VU1 of its own, three ways: the
+        // interpreter, the compiled blocks, the compiled fast blocks.
+        struct Way {
+            std::unique_ptr<Vu> vu = std::make_unique<Vu>(1);
+            std::uint64_t kicked = 14695981039346656037ull;    // FNV-1a of every GIF quadword kicked
+            u64 pairs = 0;
+        } ways[3];
+        for (int w = 0; w < 3; ++w) {
+            Vu& vu = *ways[w].vu;
+            std::uint64_t& kicked = ways[w].kicked;
+            vu.use_compiled = w != 0;
+            vu.fast = w == 2;
+            vu.on_kick = [&kicked](u64 low, u64 high) { kicked = ((kicked ^ low) * 1099511628211ull ^ high) * 1099511628211ull; };
+            vu.on_kick_block = [&kicked](const u32* words, u32 count) {
+                for (u32 i = 0; i + 1 < count; i += 2)
+                    kicked = (kicked ^ (u64(words[i]) | u64(words[i + 1]) << 32)) * 1099511628211ull;
+            };
+            std::memcpy(vu.micro.data(), micro.data(), 16384);
+            vu.MicroWritten();
+            std::memcpy(vu.data.data(), data.data(), 16384);
+            std::memcpy(vu.regs.vf, s.vf, sizeof s.vf);
+            std::memcpy(vu.regs.vc, s.vc, sizeof s.vc);
+            std::memcpy(vu.regs.vacc, s.vacc, sizeof s.vacc);
+            vu.mac = s.flags[0];
+            vu.status = s.flags[1];
+            vu.clip = s.flags[2];
+            vu.p = s.flags[3];
+            vu.top = s.flags[4];
+            vu.itop = s.flags[5];
+            ways[w].pairs = vu.Run(s.pc);
+        }
+        const Vu &interpreted = *ways[0].vu, &exact = *ways[1].vu, &fast = *ways[2].vu;
+        const bool exact_ok = ways[1].pairs == ways[0].pairs && exact.SameState(interpreted) &&
+                              ways[1].kicked == ways[0].kicked;
+        const bool fast_ok = ways[2].pairs == ways[0].pairs && fast.SameState(interpreted, false) &&
+                             ways[2].kicked == ways[0].kicked;
+        if (!exact_ok && exact_wrong++ < 5)
+            std::printf("vu-check: run %llu (pc %04X): the compiled blocks differ from the interpreter\n",
+                        (unsigned long long)runs, unsigned(s.pc));
+        if (!fast_ok && fast_wrong++ < 5)
+            std::printf("vu-check: run %llu (pc %04X): the fast blocks differ from the interpreter\n",
+                        (unsigned long long)runs, unsigned(s.pc));
+        if (fast_ok && !fast.SameState(interpreted)) ++fast_flags;     // the fast blocks taken
+        ++runs;
+        pairs += ways[0].pairs;
+        compiled += exact.compiled_pairs();
+        compiled_fast += fast.compiled_pairs();
+    }
+    std::fclose(in);
+    std::printf("vu-check: %llu runs, %llu pairs (%llu compiled, %llu fast): compiled %llu differ, fast %llu differ "
+                "(but MAC and STATUS) from the interpreter; the fast blocks left those flags in %llu runs\n",
+                (unsigned long long)runs, (unsigned long long)pairs, (unsigned long long)compiled,
+                (unsigned long long)compiled_fast, (unsigned long long)exact_wrong, (unsigned long long)fast_wrong,
+                (unsigned long long)fast_flags);
+    return runs && !exact_wrong && !fast_wrong ? 0 : 2;
 }
 
 namespace {

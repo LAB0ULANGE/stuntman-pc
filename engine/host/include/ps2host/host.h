@@ -108,6 +108,7 @@ struct Options {
     long long vu_snapshot_from = 0;
     unsigned vu_snapshot_count = 0;
     std::string vu_bench;          /* --vu-bench FILE: those runs, timed (and nothing else) */
+    std::string vu_check;          /* --vu-check FILE: those runs against the interpreter (and nothing else) */
     bool check_guesses = false;    /* --check-guesses: GIF_STAT guesses checked (virtual time) */
     bool vif1_sync = false;        /* --vif1-sync: VIF1 on the EE's thread in real time too */
     bool vif1_worker_virtual = false;  /* --vif1-worker-virtual: VIF1's worker in virtual time too (a check) */

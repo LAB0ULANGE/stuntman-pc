@@ -116,6 +116,11 @@ public:
        hash of every run's registers and memory after (what a change to the
        VU must leave alone). Returns 0, or 1 when the file cannot be read. */
     static int Bench(const std::string& path, int passes = 5, bool fast = false);
+    /* --vu-check: those runs each three ways - interpreted, compiled, compiled
+       fast - and compared with the interpreter: pairs, every register, flag
+       (fast: but MAC and STATUS), pipeline, data memory and GIF quadword
+       kicked. Returns 0 when all agree, 2 when one differs, 1 unreadable. */
+    static int Check(const std::string& path);
     /* How often each program address was started, for reports. */
     const std::map<u32, u64>& starts() const { return starts_; }
 
