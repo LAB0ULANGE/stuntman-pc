@@ -967,9 +967,12 @@ u64 ClutHash(const Bridge& b, u32 psm, u32 csa) {
 /* texture_reuse: CLUT loads and textures over GPU drawing told apart by the
    blocks they read; textures decoded once for each content (CachedTexture). */
 bool g_texture_reuse = false;
-// Its parts (PS2HOST_TEXTURE_REUSE_PARTS, all by default): 1 the CLUT's
-// blocks, 2 the texels sampled, 4 an image for each content.
-unsigned g_texture_reuse_parts = 7;
+// Its parts (PS2HOST_TEXTURE_REUSE_PARTS, 1 and 4 by default): 1 the CLUT's
+// blocks, 2 the texels sampled, 4 an image for each content. 2 left out: in
+// Stuntman's crash each smoke particle samples its own corner of a texture
+// the GPU drew over - a texture of its own each, ~370 decodes a picture, the
+// GPU 26 -> 35 ms a picture there for ~1 ms gained while driving.
+unsigned g_texture_reuse_parts = 5;
 // The texture just looked up (CachedTexture) is the blocks its primitive
 // reads: the next primitive, reading others, may not take it on the fast path.
 bool g_texture_narrowed = false;
