@@ -407,6 +407,9 @@ std::string RendererCounters();
 /* A full memory barrier with nothing recorded since the one before, in the
    same command buffer, left out (true: the "barriers=dedupe" setting). */
 void SetBarrierDedupe(bool on);
+/* Those barriers between the stages the renderer records work in rather
+   than all commands (true: "barriers=precise"). */
+void SetBarrierStages(bool on);
 /* The GPU's time on the frames' command buffers, in all (nanoseconds; 0
    where the GPU keeps no time). */
 std::uint64_t GpuBusyNanoseconds();

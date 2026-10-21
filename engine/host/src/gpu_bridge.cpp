@@ -2320,8 +2320,11 @@ void SetTextureReuse(bool on) {
 }
 
 void SetBarriers(const std::string& mode) {
-    ps2gpu::SetBarrierDedupe(mode == "dedupe");
+    ps2gpu::SetBarrierDedupe(mode == "dedupe" || mode == "precise");
+    ps2gpu::SetBarrierStages(mode == "precise");
     if (mode == "dedupe") std::fprintf(stderr, "[gpu] barriers=dedupe: a barrier with nothing since the last left out\n");
+    if (mode == "precise")
+        std::fprintf(stderr, "[gpu] barriers=precise: between the renderer's stages, none with nothing since the last\n");
 }
 
 void SetTextureCache(const std::string& mode) {
