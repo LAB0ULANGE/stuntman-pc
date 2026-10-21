@@ -242,6 +242,9 @@ struct Bridge {
         u64 renderer_key = 0;
         u64 bytes = 0;
         std::list<u64>::iterator lru;
+        // The textures (keys) that have shown it, to unhook as it goes -
+        // looking through all 4,096 for each was 4% of the GS thread.
+        std::vector<u64> shown_by;
     };
     std::unordered_map<u64, ContentImage> content_images;
     std::list<u64> content_lru;
@@ -1333,6 +1336,8 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th, con
             if (found != b.content_images.end()) {
                 b.content_lru.splice(b.content_lru.begin(), b.content_lru, found->second.lru);
                 t.shown_key = found->second.renderer_key;
+                std::vector<u64>& by = found->second.shown_by;
+                if (std::find(by.begin(), by.end(), key) == by.end()) by.push_back(key);
                 ++b.content_reused;
                 t.decoded_serial = b.serial;
                 ++g_mutations;
@@ -1341,7 +1346,7 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th, con
                 gpu_decode(image);
                 b.content_lru.push_front(content_key);
                 const u64 bytes = u64(tw) * th * 4;
-                b.content_images[content_key] = {image, bytes, b.content_lru.begin()};
+                b.content_images[content_key] = {image, bytes, b.content_lru.begin(), {key}};
                 b.content_bytes += bytes;
                 t.shown_key = image;
                 ++b.decodes;
@@ -1355,8 +1360,11 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th, con
                     if (gone == b.content_images.end()) continue;
                     // (an entry still showing it decodes again: its content
                     // looked up anew)
-                    for (auto& [tkey, other] : b.textures)
-                        if (other.shown_key == gone->second.renderer_key) other.shown_key = 0, other.valid = other.decoded = false;
+                    for (const u64 by : gone->second.shown_by) {
+                        const auto other = b.textures.find(by);
+                        if (other != b.textures.end() && other->second.shown_key == gone->second.renderer_key)
+                            other->second.shown_key = 0, other->second.valid = other->second.decoded = false;
+                    }
                     b.renderer->ReleaseTexture(gone->second.renderer_key);
                     b.content_bytes -= gone->second.bytes;
                     b.content_images.erase(gone);
@@ -1530,14 +1538,20 @@ void OnDraw(const gs::Gs::DrawCall& call) {
     const std::size_t n = Triangles(call, fst, tw, th, v, &gouraud);
     state.gouraud = gouraud;
     if (!n) return;
-    u32 x0 = state.width, x1 = 0, y1 = 0, y0 = state.height;
-    for (std::size_t i = 0; i < n; ++i) {
-        x0 = std::min(x0, u32(std::clamp(std::floor(v[i].x), 0.0f, float(state.width))));
-        // Exclusive: the GS draws the pixels whose centres lie before the far edge.
-        x1 = std::max(x1, u32(std::clamp(std::ceil(v[i].x), 0.0f, float(state.width))));
-        y1 = std::max(y1, u32(std::clamp(std::ceil(v[i].y), 0.0f, float(state.height))));
-        y0 = std::min(y0, u32(std::clamp(std::floor(v[i].y), 0.0f, float(state.height))));
+    // The vertices' extremes first, rounded once (floor, ceil and the clamp
+    // keep order: the same as rounding each - and floor is a call in SSE2).
+    float min_x = v[0].x, max_x = v[0].x, min_y = v[0].y, max_y = v[0].y;
+    for (std::size_t i = 1; i < n; ++i) {
+        min_x = std::min(min_x, v[i].x);
+        max_x = std::max(max_x, v[i].x);
+        min_y = std::min(min_y, v[i].y);
+        max_y = std::max(max_y, v[i].y);
     }
+    u32 x0 = u32(std::clamp(std::floor(min_x), 0.0f, float(state.width)));
+    // Exclusive: the GS draws the pixels whose centres lie before the far edge.
+    u32 x1 = u32(std::clamp(std::ceil(max_x), 0.0f, float(state.width)));
+    u32 y1 = u32(std::clamp(std::ceil(max_y), 0.0f, float(state.height)));
+    u32 y0 = u32(std::clamp(std::floor(min_y), 0.0f, float(state.height)));
     y0 = std::max(y0, u32(std::max(state.scissor_y0, 0)));
     x0 = std::max(x0, u32(std::max(state.scissor_x0, 0)));
     x1 = std::min(x1, u32(state.scissor_x1 + 1));
@@ -2407,7 +2421,8 @@ void GpuShadowFrame(u64 frame, const std::string& dump_dir) {
                 std::fprintf(stderr, "[gpu]     GPU decodes %llu: %s\n", (unsigned long long)kinds[i].first, kinds[i].second.c_str());
             g_decode_kinds.clear();
         }
-        if (std::getenv("PS2HOST_GPU_LOG")) {
+        static const bool gpu_log = std::getenv("PS2HOST_GPU_LOG") != nullptr;   // (each frame: getenv scans the environment)
+        if (gpu_log) {
             std::fprintf(stderr, "[gpu]   KB to the CPU: %llu for textures, %llu for reads, %llu for writes;",
                          static_cast<unsigned long long>(s.downloads_by[0] / 4),
                          static_cast<unsigned long long>(s.downloads_by[1] / 4),
@@ -2417,7 +2432,7 @@ void GpuShadowFrame(u64 frame, const std::string& dump_dir) {
                              static_cast<unsigned long long>(blocks / 4));
             std::fprintf(stderr, "\n");
         }
-        if (std::getenv("PS2HOST_GPU_LOG"))
+        if (gpu_log)
             for (const auto& [key, o] : s.owned)
                 std::fprintf(stderr, "[gpu]   %s %X/%u/%02X blocks %X-%X drawn to %X, %ux%u; reloads new %llu memory %llu draw %llu write-back %llu\n",
                              o.depth ? "Z" : "C", unsigned(o.fbp), unsigned(o.fbw), unsigned(o.psm), unsigned(o.begin),
