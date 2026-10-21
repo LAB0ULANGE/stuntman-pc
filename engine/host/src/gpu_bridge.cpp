@@ -405,6 +405,9 @@ std::vector<u32> g_wb_owner(16384, 0);
 std::vector<u8> g_wb_read(1, 1);
 std::vector<u32> g_wb_blocks(1, 0);             // blocks each still owns
 u64 g_wb_done = 0, g_wb_never_read = 0, g_wb_never_read_blocks = 0;
+// Texels of images reloaded from memory, of them in rows past those the image
+// has reached, and texels written back (PS2HOST_GPU_COUNT).
+u64 g_reload_texels = 0, g_reload_beyond = 0, g_wb_texels = 0;
 void SetWriteBackOwner(u32 i, u32 id) {
     const u32 old = g_wb_owner[i];
     if (old == id) return;
@@ -544,6 +547,7 @@ void WriteBack(Bridge& b, Owned& o) {
                               : b.renderer->TargetToMemory(o.fbp, o.fbw, o.psm, o.x1, last, first);
     if (!done && gs::TheGs().trace) std::fprintf(gs::TheGs().trace_out, "[gpu]   (nothing to write back)\n");
     if (done && CountingWriteBacks()) {
+        g_wb_texels += u64(last > first ? last - first : 0) * o.x1;
         // The one before over these blocks, if never read, is now lost.
         const u32 id = u32(g_wb_read.size());
         g_wb_read.push_back(0);
@@ -735,6 +739,14 @@ Owned& Use(Bridge& b, u32 fbp, u32 fbw, u32 psm, bool depth, u32 width, u32 heig
         ++b.reloads;
         Coherent(b, o.begin, o.full_end, true);
         const u32 r0 = std::min(o.stale_row0, o.height), r1 = std::min(o.stale_row1, o.height);
+        if (CountingWriteBacks() && r0 < r1) {
+            const bool whole = (r0 == 0 && r1 >= o.height) || depth;
+            const u32 from = whole ? 0 : r0, to = whole ? o.height : r1;
+            const u32 page_rows = Is16(o.psm) ? 64 : 32, row_blocks = std::max(1u, o.fbw) * 32;
+            const u32 reached = std::min(o.height, (o.end - o.begin + row_blocks - 1) / row_blocks * page_rows);
+            g_reload_texels += u64(to - from) * o.width;
+            if (to > std::max(from, reached)) g_reload_beyond += u64(to - std::max(from, reached)) * o.width;
+        }
         {
             const u32 page_rows = Is16(o.psm) ? 64 : 32, row_blocks = std::max(1u, o.fbw) * 32;
             WriteBackRead(o.begin + r0 / page_rows * row_blocks, o.begin + (r1 + page_rows - 1) / page_rows * row_blocks);
@@ -2380,6 +2392,9 @@ void GpuShadowFrame(u64 frame, const std::string& dump_dir) {
             std::fprintf(stderr, "[gpu]   write-backs so far %llu; written over unread %llu (blocks %llu)\n",
                          (unsigned long long)g_wb_done, (unsigned long long)g_wb_never_read,
                          (unsigned long long)g_wb_never_read_blocks);
+            std::fprintf(stderr, "[gpu]   texels so far: reloaded %llu (%llu past the rows the image reached), written back %llu\n",
+                         (unsigned long long)g_reload_texels, (unsigned long long)g_reload_beyond,
+                         (unsigned long long)g_wb_texels);
             std::vector<std::pair<u64, std::string>> kinds;
             for (const auto& [k, n] : g_decode_kinds) kinds.emplace_back(n, k);
             std::sort(kinds.rbegin(), kinds.rend());
