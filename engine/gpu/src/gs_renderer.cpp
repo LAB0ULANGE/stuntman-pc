@@ -699,8 +699,13 @@ private:
     std::uint32_t ScaleOf(std::uint32_t width) const { return width <= 320 ? 1u : scale_; }
     Image* open_target_ = nullptr;
     Image* open_depth_ = nullptr;
+    // (measure, PS2HOST_GPU_COUNT: why the open pass ended - a draw's reason,
+    // else work that cannot go in a pass, or the submission)
+    const char* pass_end_why_ = nullptr;
     void EndPass(VkCommandBuffer cmd) {
         if (!open_target_) return;
+        if (CountingBreaks()) ++g_breaks[pass_end_why_ ? pass_end_why_ : "(pass ended: work outside a pass, a submit)"];
+        pass_end_why_ = nullptr;
         vkCmdEndRendering(cmd);
         open_target_ = open_depth_ = nullptr;
     }
@@ -3236,7 +3241,15 @@ void VulkanGsRenderer::Flush() {
             const bool in_pass = state_.date && date_in_pass_ != 0 && InputSet(*t);
             const bool outside = (state_.date && !in_pass) || copy_first ||
                                  (source && source->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (CountingBreaks() && open_target_)
+                pass_end_why_ = state_.date && !in_pass ? "(pass ended: DATE set up outside)"
+                                : copy_first            ? "(pass ended: a feedback copy)"
+                                : source && source->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                    ? "(pass ended: a texture drawn into, made readable)"
+                                : open_target_ != t     ? "(pass ended: another target)"
+                                                        : "(pass ended: another depth buffer)";
             if (outside || open_target_ != t || open_depth_ != depth) EndPass(cmd);
+            pass_end_why_ = nullptr;
             if (CountingBreaks() && in_pass) ++g_breaks["(DATE set up within the pass)"];
             if (CountingBreaks()) {     // (measure: DATE setups whose stencil the last left as it is)
                 static Image* last_t = nullptr;
