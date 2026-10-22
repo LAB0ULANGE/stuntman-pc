@@ -179,6 +179,9 @@ bool OpenWindow(const wchar_t* title, int width, int height) {
         // skipped, not waited for on the GS thread.
         g_display->SetPresentWait(Setting("present_no_wait", "on") != "on");
         g_display->SetAspect(SettingAspect());
+        // "antialiasing" fxaa (off by default), "sharpen" 0-100 (0).
+        g_display->SetPostFilter(Setting("antialiasing", "off") == "fxaa",
+                                 float(std::atoi(Setting("sharpen", "0").c_str())) / 100.0f);
         return true;
     }
     Note("window", "window: no Vulkan display (" + error + "); drawing with GDI");

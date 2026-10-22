@@ -16,6 +16,8 @@
 #include <volk.h>
 
 #include "gpu_internal.h"
+#include "post_frag.h"
+#include "post_vert.h"
 
 #include <algorithm>
 #ifdef _WIN32
@@ -99,6 +101,12 @@ public:
         return float(w) / float(h);
     }
     std::atomic<float> aspect_{4.0f / 3.0f};
+    void SetPostFilter(bool fxaa, float sharpen) override {
+        fxaa_ = fxaa;
+        sharpen_ = std::clamp(sharpen, 0.0f, 1.0f);
+    }
+    std::atomic<bool> fxaa_{false};
+    std::atomic<float> sharpen_{0.0f};
     std::uint32_t PixelHeight() const override {
         int w = 0, h = 0;
         if (!window_ || !SDL_GetWindowSizeInPixels(window_, &w, &h)) return 0;
@@ -232,14 +240,34 @@ private:
     // Set by Pump (the main thread), read where pictures are presented (the
     // GS thread, when it presents).
     std::atomic<bool> closed_{false}, stale_{false};
+    /* SetPostFilter's pass (post.frag): an image the display made, as the
+       shader reads it - its view, and a descriptor set for it. */
+    struct Sampled {
+        VkImageView view = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+    };
     /* Acquires the next swapchain image and begins the command buffer:
        false (with *ok) when there is nothing to present into. */
     bool BeginPresent(std::uint32_t* index, bool* ok);
-    /* Clears the swapchain image, blits `source` (TRANSFER_SRC) to it 4:3,
-       submits and presents. */
-    bool FinishPresent(std::uint32_t index, VkImage source, std::uint32_t width, std::uint32_t height);
+    /* Clears the swapchain image and blits `source` (TRANSFER_SRC) to it
+       4:3 - or draws it with SetPostFilter's pass, from `sampled`. */
+    bool FinishPresent(std::uint32_t index, VkImage source, std::uint32_t width, std::uint32_t height,
+                       const Sampled* sampled = nullptr);
     /* Ends the command buffer, submits it and presents the image. */
     bool Submit(std::uint32_t index);
+    bool MakeSampled(VkImage image, VkFormat format, Sampled* sampled);
+    void DropSampled(Sampled* sampled);
+    /* The pass's pipeline, for the swapchain's format (again when it changes). */
+    bool EnsurePost();
+    void DestroyPost();
+    VkSampler post_sampler_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout post_set_layout_ = VK_NULL_HANDLE;
+    VkDescriptorPool post_pool_ = VK_NULL_HANDLE;
+    VkPipelineLayout post_layout_ = VK_NULL_HANDLE;
+    VkPipeline post_pipeline_ = VK_NULL_HANDLE;
+    VkFormat post_format_ = VK_FORMAT_UNDEFINED;
+    std::vector<VkImageView> views_;        // the swapchain images', for the pass
+    Sampled picture_sampled_;               // picture_'s
     bool dual_source_ = false;
     std::string describe_, error_;
     // PresentImageAt's pictures: copies of the frames' targets, three, each
@@ -247,6 +275,7 @@ private:
     static constexpr int kPaced = 3;
     struct PacedPicture {
         VkImage image = VK_NULL_HANDLE;
+        Sampled sampled;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkCommandBuffer copy = VK_NULL_HANDLE;
         VkFence copied = VK_NULL_HANDLE;
@@ -429,7 +458,11 @@ bool VulkanDisplay::Init(const char* title, int width, int height) {
     cmd_ = cmds_[0];
     acquired_ = acquireds_[0];
     fence_ = fences_[0];
-    return CreateSwapchain();
+    if (!CreateSwapchain()) return false;
+    // SetPostFilter's pass made now, on this thread, before any picture
+    // (MakeSampled's sets come from its pool); without it, the blit.
+    if (!EnsurePost()) std::fprintf(stderr, "[window] no picture pass (FXAA, sharpening): the plain blit\n");
+    return true;
 }
 
 bool VulkanDisplay::CreateSwapchain() {
@@ -470,7 +503,7 @@ bool VulkanDisplay::CreateSwapchain() {
     sci.imageColorSpace = chosen.colorSpace;
     sci.imageExtent = extent_;
     sci.imageArrayLayers = 1;
-    sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    sci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     sci.preTransform = caps.currentTransform;
     sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -489,6 +522,16 @@ bool VulkanDisplay::CreateSwapchain() {
                  : mode_ == VK_PRESENT_MODE_IMMEDIATE_KHR ? "IMMEDIATE"
                                                           : "another mode");
     vkGetSwapchainImagesKHR(device_, swapchain_, &n, images_.data());
+    views_.assign(n, VK_NULL_HANDLE);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image = images_[i];
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = format_;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (!Check(vkCreateImageView(device_, &vci, nullptr, &views_[i]), "vkCreateImageView (swapchain)"))
+            return false;
+    }
     VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     rendered_.resize(n);
     for (auto& s : rendered_)
@@ -505,6 +548,9 @@ void VulkanDisplay::DestroySwapchain() {
     }
     for (VkSemaphore s : rendered_) vkDestroySemaphore(device_, s, nullptr);
     rendered_.clear();
+    for (VkImageView v : views_)
+        if (v) vkDestroyImageView(device_, v, nullptr);
+    views_.clear();
     images_.clear();
     if (swapchain_) vkDestroySwapchainKHR(device_, swapchain_, nullptr);
     swapchain_ = VK_NULL_HANDLE;
@@ -524,6 +570,7 @@ void VulkanDisplay::DestroyPicture() {
     mapped_ = nullptr;
     if (staging_) vkDestroyBuffer(device_, staging_, nullptr);
     if (staging_memory_) vkFreeMemory(device_, staging_memory_, nullptr);
+    DropSampled(&picture_sampled_);
     if (picture_) vkDestroyImage(device_, picture_, nullptr);
     if (picture_memory_) vkFreeMemory(device_, picture_memory_, nullptr);
     staging_ = VK_NULL_HANDLE;
@@ -563,7 +610,7 @@ bool VulkanDisplay::EnsurePicture(std::uint32_t width, std::uint32_t height) {
     ici.arrayLayers = 1;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (!Check(vkCreateImage(device_, &ici, nullptr, &picture_), "vkCreateImage")) return false;
     vkGetImageMemoryRequirements(device_, picture_, &req);
@@ -572,6 +619,7 @@ bool VulkanDisplay::EnsurePicture(std::uint32_t width, std::uint32_t height) {
     if (!Check(vkAllocateMemory(device_, &mai, nullptr, &picture_memory_), "vkAllocateMemory (picture)"))
         return false;
     vkBindImageMemory(device_, picture_, picture_memory_, 0);
+    if (!MakeSampled(picture_, VK_FORMAT_B8G8R8A8_UNORM, &picture_sampled_)) return false;
     picture_width_ = width;
     picture_height_ = height;
     return true;
@@ -633,6 +681,153 @@ bool VulkanDisplay::BeginPresent(std::uint32_t* index, bool* ok) {
     return true;
 }
 
+bool VulkanDisplay::MakeSampled(VkImage image, VkFormat format, Sampled* sampled) {
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = format;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (!Check(vkCreateImageView(device_, &vci, nullptr, &sampled->view), "vkCreateImageView (picture)"))
+        return false;
+    if (!post_pool_) return true;           // no pass (EnsurePost failed): the blit, as before
+    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool = post_pool_;
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts = &post_set_layout_;
+    if (vkAllocateDescriptorSets(device_, &dai, &sampled->set) != VK_SUCCESS) {
+        sampled->set = VK_NULL_HANDLE;
+        return true;
+    }
+    VkDescriptorImageInfo info{post_sampler_, sampled->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = sampled->set;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &info;
+    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    return true;
+}
+
+void VulkanDisplay::DropSampled(Sampled* sampled) {
+    if (sampled->set) vkFreeDescriptorSets(device_, post_pool_, 1, &sampled->set);
+    if (sampled->view) vkDestroyImageView(device_, sampled->view, nullptr);
+    *sampled = Sampled{};
+}
+
+bool VulkanDisplay::EnsurePost() {
+    if (post_pipeline_ && post_format_ == format_) return true;
+    if (!post_layout_) {
+        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(device_, &sci, nullptr, &post_sampler_) != VK_SUCCESS) return false;
+        VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        lci.bindingCount = 1;
+        lci.pBindings = &binding;
+        if (vkCreateDescriptorSetLayout(device_, &lci, nullptr, &post_set_layout_) != VK_SUCCESS) return false;
+        // The paced pictures and the software picture's: a few sets, freed
+        // and made again as they are.
+        VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8};
+        VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        dpi.maxSets = 8;
+        dpi.poolSizeCount = 1;
+        dpi.pPoolSizes = &size;
+        if (vkCreateDescriptorPool(device_, &dpi, nullptr, &post_pool_) != VK_SUCCESS) return false;
+        VkPushConstantRange range{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
+        VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &post_set_layout_;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &range;
+        if (vkCreatePipelineLayout(device_, &pli, nullptr, &post_layout_) != VK_SUCCESS) return false;
+    }
+    if (format_ == VK_FORMAT_UNDEFINED) return false;
+    if (post_pipeline_) vkDestroyPipeline(device_, post_pipeline_, nullptr);
+    post_pipeline_ = VK_NULL_HANDLE;
+    auto module = [&](const std::uint32_t* code, std::size_t bytes) {
+        VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        ci.codeSize = bytes;
+        ci.pCode = code;
+        VkShaderModule m = VK_NULL_HANDLE;
+        vkCreateShaderModule(device_, &ci, nullptr, &m);
+        return m;
+    };
+    VkShaderModule vert = module(spirv_post_vert, sizeof spirv_post_vert);
+    VkShaderModule frag = module(spirv_post_frag, sizeof spirv_post_frag);
+    VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
+                                                 {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewport.viewportCount = 1;
+    viewport.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState attachment{};
+    attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                                VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blending.attachmentCount = 1;
+    blending.pAttachments = &attachment;
+    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dynamic_states;
+    VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &format_;
+    VkGraphicsPipelineCreateInfo pci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pci.pNext = &rendering;
+    pci.stageCount = 2;
+    pci.pStages = stages;
+    pci.pVertexInputState = &input;
+    pci.pInputAssemblyState = &assembly;
+    pci.pViewportState = &viewport;
+    pci.pRasterizationState = &raster;
+    pci.pMultisampleState = &multisample;
+    pci.pColorBlendState = &blending;
+    pci.pDynamicState = &dynamic;
+    pci.layout = post_layout_;
+    const VkResult r = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pci, nullptr, &post_pipeline_);
+    vkDestroyShaderModule(device_, vert, nullptr);
+    vkDestroyShaderModule(device_, frag, nullptr);
+    if (r != VK_SUCCESS) {
+        post_pipeline_ = VK_NULL_HANDLE;
+        return false;
+    }
+    post_format_ = format_;
+    return true;
+}
+
+void VulkanDisplay::DestroyPost() {
+    if (!device_) return;
+    if (post_pipeline_) vkDestroyPipeline(device_, post_pipeline_, nullptr);
+    if (post_layout_) vkDestroyPipelineLayout(device_, post_layout_, nullptr);
+    if (post_pool_) vkDestroyDescriptorPool(device_, post_pool_, nullptr);
+    if (post_set_layout_) vkDestroyDescriptorSetLayout(device_, post_set_layout_, nullptr);
+    if (post_sampler_) vkDestroySampler(device_, post_sampler_, nullptr);
+    post_pipeline_ = VK_NULL_HANDLE;
+    post_layout_ = VK_NULL_HANDLE;
+    post_pool_ = VK_NULL_HANDLE;
+    post_set_layout_ = VK_NULL_HANDLE;
+    post_sampler_ = VK_NULL_HANDLE;
+}
+
 void VulkanDisplay::DrawOverlay(VkImage target) {
     std::lock_guard<std::mutex> hold(overlay_lock_);
     if (overlay_.empty() || !overlay_width_ || !overlay_height_) return;
@@ -667,13 +862,19 @@ void VulkanDisplay::DrawOverlay(VkImage target) {
     vkCmdCopyBufferToImage(cmd_, overlay_buffer_, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 }
 
-bool VulkanDisplay::FinishPresent(std::uint32_t index, VkImage source, std::uint32_t width, std::uint32_t height) {
+bool VulkanDisplay::FinishPresent(std::uint32_t index, VkImage source, std::uint32_t width, std::uint32_t height,
+                                  const Sampled* sampled) {
     const VkImage target = images_[index];
-    Barrier(cmd_, target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-            VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    // SetPostFilter's pass where the picture is one of the display's own
+    // (a paced picture, the software picture's) - drawn, not blitted.
+    const bool post = sampled && sampled->set && (fxaa_ || sharpen_ > 0.0f) && index < views_.size() && EnsurePost();
     const VkClearColorValue black{};
     const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(cmd_, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
+    if (!post) {
+        Barrier(cmd_, target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        vkCmdClearColorImage(cmd_, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
+    }
     // 4:3 as a television shows it, 16:9, or the window's own shape (SetAspect),
     // centred in the window.
     std::int32_t w = std::int32_t(extent_.width), h = std::int32_t(extent_.height);
@@ -688,14 +889,58 @@ bool VulkanDisplay::FinishPresent(std::uint32_t index, VkImage source, std::uint
     shown_y0_.store(y0);
     shown_w_.store(std::max(dw, 1));
     shown_h_.store(std::max(dh, 1));
-    VkImageBlit blit{};
-    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    blit.srcOffsets[1] = {std::int32_t(width), std::int32_t(height), 1};
-    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    blit.dstOffsets[0] = {x0, y0, 0};
-    blit.dstOffsets[1] = {x0 + dw, y0 + dh, 1};
-    vkCmdBlitImage(cmd_, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target,
-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+    if (post) {
+        // The picture read by the shader, the swapchain image drawn: cleared
+        // black, the picture in its place.
+        Barrier(cmd_, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        Barrier(cmd_, target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        VkRenderingAttachmentInfo attachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        attachment.imageView = views_[index];
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.clearValue.color = black;
+        VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        rendering.renderArea = {{0, 0}, extent_};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &attachment;
+        vkCmdBeginRendering(cmd_, &rendering);
+        const VkViewport viewport{float(x0), float(y0), float(dw), float(dh), 0.0f, 1.0f};
+        const VkRect2D scissor{{0, 0}, extent_};
+        vkCmdSetViewport(cmd_, 0, 1, &viewport);
+        vkCmdSetScissor(cmd_, 0, 1, &scissor);
+        vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, post_pipeline_);
+        vkCmdBindDescriptorSets(cmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, post_layout_, 0, 1, &sampled->set, 0,
+                                nullptr);
+        struct {
+            float texel[2];
+            std::uint32_t fxaa;
+            float sharpen;
+        } params{{1.0f / float(width), 1.0f / float(height)}, fxaa_ ? 1u : 0u, sharpen_.load()};
+        vkCmdPushConstants(cmd_, post_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof params, &params);
+        vkCmdDraw(cmd_, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd_);
+        Barrier(cmd_, source, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT);
+        Barrier(cmd_, target, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    } else {
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.srcOffsets[1] = {std::int32_t(width), std::int32_t(height), 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.dstOffsets[0] = {x0, y0, 0};
+        blit.dstOffsets[1] = {x0 + dw, y0 + dh, 1};
+        vkCmdBlitImage(cmd_, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+    }
     DrawOverlay(target);
     Barrier(cmd_, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -724,7 +969,7 @@ bool VulkanDisplay::Present(const std::uint32_t* pixels, std::uint32_t width, st
     Barrier(cmd_, picture_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT);
-    FinishPresent(index, picture_, width, height);
+    FinishPresent(index, picture_, width, height, &picture_sampled_);
     return Submit(index);
 }
 
@@ -774,7 +1019,7 @@ bool VulkanDisplay::EnsurePaced(std::uint32_t width, std::uint32_t height) {
         ici.arrayLayers = 1;
         ici.samples = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (!Check(vkCreateImage(device_, &ici, nullptr, &p.image), "vkCreateImage (paced)")) return false;
         VkMemoryRequirements req;
@@ -784,6 +1029,7 @@ bool VulkanDisplay::EnsurePaced(std::uint32_t width, std::uint32_t height) {
         mai.memoryTypeIndex = FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         if (!Check(vkAllocateMemory(device_, &mai, nullptr, &p.memory), "vkAllocateMemory (paced)")) return false;
         vkBindImageMemory(device_, p.image, p.memory, 0);
+        if (!MakeSampled(p.image, VK_FORMAT_B8G8R8A8_UNORM, &p.sampled)) return false;
         VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         cai.commandPool = copy_pool_;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -804,6 +1050,7 @@ void VulkanDisplay::DestroyPaced() {
     for (PacedPicture& p : paced_) {
         if (p.copied) vkDestroyFence(device_, p.copied, nullptr);
         if (p.copy) vkFreeCommandBuffers(device_, copy_pool_, 1, &p.copy);
+        DropSampled(&p.sampled);
         if (p.image) vkDestroyImage(device_, p.image, nullptr);
         if (p.memory) vkFreeMemory(device_, p.memory, nullptr);
         p = PacedPicture{};
@@ -958,7 +1205,8 @@ void VulkanDisplay::PresentLoop() {
         }
         {
             if (began) {
-                FinishPresent(index, paced_[slot].image, paced_[slot].width, paced_[slot].height);
+                FinishPresent(index, paced_[slot].image, paced_[slot].width, paced_[slot].height,
+                              &paced_[slot].sampled);
                 Submit(index);
                 PresentObserver observer;
                 {
@@ -982,7 +1230,8 @@ void VulkanDisplay::PresentLoop() {
 bool VulkanDisplay::Submit(std::uint32_t index) {
     vkEndCommandBuffer(cmd_);
     begun_ = false;
-    const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    const VkPipelineStageFlags wait_stage =
+        VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.waitSemaphoreCount = 1;
     submit.pWaitSemaphores = &acquired_;
@@ -1305,6 +1554,7 @@ VulkanDisplay::~VulkanDisplay() {
     DestroyPaced();
     if (copy_pool_) vkDestroyCommandPool(device_, copy_pool_, nullptr);
     DestroyPicture();
+    DestroyPost();
     if (overlay_buffer_) vkDestroyBuffer(device_, overlay_buffer_, nullptr);
     if (overlay_memory_) vkFreeMemory(device_, overlay_memory_, nullptr);
     DestroySwapchain();

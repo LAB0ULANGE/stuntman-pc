@@ -90,6 +90,10 @@ public:
        television showed it (the default), 16:9, or 0 - the window's own
        shape, filled. Letterboxed or pillarboxed in the window otherwise. */
     virtual void SetAspect(float aspect) { (void)aspect; }
+    /* On the way to the window, from the picture's own texels: FXAA (the
+       edges' stairs smoothed) and sharpening, 0 none to 1 most. Neither
+       (the default): the picture scaled as it is. */
+    virtual void SetPostFilter(bool fxaa, float sharpen) { (void)fxaa, (void)sharpen; }
     /* The window's shape in the screen's pixels, width over height (0 when
        not known). */
     virtual float WindowAspect() const { return 0.0f; }
