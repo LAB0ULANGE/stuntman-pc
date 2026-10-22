@@ -1962,6 +1962,17 @@ void NotePresented(u64 frame, bool fresh) {
 void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
     u32 fbp = 0, fbw = 0, psm = 0;
     gs::Gs& gs = gs::TheGs();
+    // display_reload: the picture shown brought up to date first, as the
+    // next draw into it would be (Use). Another image over the same memory
+    // drawn since left it stale - Stuntman's menus, views 512, 640 and 1024
+    // wide of the buffer at 0 - and every other field went to the software
+    // GS's picture below: memory without the GPU's drawing, flickering.
+    static const bool reload = SettingOn("display_reload", false);
+    if (reload && g_bridge && gs.Displayed(&fbp, &fbw, &psm)) {
+        auto found = g_bridge->owned.find(std::make_tuple(fbp, fbw, psm, false));
+        if (found != g_bridge->owned.end() && found->second.stale && found->second.width)
+            Use(*g_bridge, fbp, fbw, psm, false, found->second.width, found->second.height, 1);
+    }
     // present_on_render_thread: what the GS model and the bridge know of the
     // picture taken here, the rest - its image from the renderer, the
     // present - in turn on the renderer's thread, the GS thread going on (it
@@ -1976,14 +1987,32 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
             const u32 dby = weave ? gs.DisplayedDby() : 0, parity = u32(frame + 1) & 1;
             const u32 lines = std::min(shown_lines, 448u);
             static u64 shown_serial = 0;
-            static bool fresh_before = false;
             const bool fresh = found->second.drawn_serial != shown_serial;
             shown_serial = found->second.drawn_serial;
             // weave_auto: a field to the woven picture only when it is a new
-            // one, and that shown only when the field before was one too.
+            // one (on the lines of the parity it was drawn for), and that
+            // shown while the last three new ones alternated parity - the
+            // game drawing each field, held a while now and then (Stuntman's
+            // menus hold a picture three fields, a few more when it streams,
+            // the parities still in turn). New pictures of one parity (its
+            // stunt, 25 a second, now and then the other after a miss): each
+            // alone - woven, beside a picture long gone.
+            static u32 parities = 0, news = 0;          // the last new pictures' parities (bit 0 the latest)
+            if (fresh) {
+                parities = (parities << 1 | parity) & 7;
+                news = std::min(news + 1, 3u);
+            }
+            const bool alternating = news == 3 && (parities == 2 || parities == 5);
             const bool weave_in = weave && (!gs.weave_auto || fresh);
-            const bool woven = weave && (!gs.weave_auto || (fresh && fresh_before));
-            fresh_before = fresh;
+            const bool woven = weave && (!gs.weave_auto || alternating);
+            const bool keep_woven = gs.weave_auto;
+            // PS2HOST_FIELD_TRACE: each field's picture, as shown.
+            static const bool field_trace = std::getenv("PS2HOST_FIELD_TRACE") != nullptr;
+            if (field_trace)
+                std::fprintf(stderr, "[field] %llu parity %u fbp %X dby %u serial %llu%s%s\n",
+                             (unsigned long long)frame, unsigned(parity), unsigned(fbp), unsigned(dby),
+                             (unsigned long long)found->second.drawn_serial, fresh ? " new" : "",
+                             woven ? " woven" : "");
             ps2gpu::Display* shown = &display;
             g_bridge->renderer->Then([=](ps2gpu::GsRenderer& r) {
                 std::uint64_t image = 0;
@@ -1996,10 +2025,25 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
                     if (due_ns) shown->PresentImageAt(image, layout, width, height, due_ns);
                     else shown->PresentImage(image, layout, width, height);
                 };
-                if (weave_in && r.WeaveField(fbp, fbw, psm, dby, shown_lines, parity, &image, &layout, &w, &h) &&
-                    woven)
-                    present(std::min(w, 640u * k), h);
-                else if (r.DisplayTarget(fbp, fbw, psm, &image, &layout, &w, &h))
+                // The woven picture as WeaveField last left it (the renderer's
+                // thread's; WeaveField alone makes it again): shown again on a
+                // field adding nothing to it.
+                static std::uint64_t woven_image = 0;
+                static int woven_layout = 0;
+                static u32 woven_w = 0, woven_h = 0;
+                const bool copied =
+                    weave_in && r.WeaveField(fbp, fbw, psm, dby, shown_lines, parity, &image, &layout, &w, &h);
+                if (copied) {
+                    woven_image = image;
+                    woven_layout = layout;
+                    woven_w = w;
+                    woven_h = h;
+                }
+                if (woven && woven_image && (copied || keep_woven)) {
+                    image = woven_image;
+                    layout = woven_layout;
+                    present(std::min(woven_w, 640u * k), woven_h);
+                } else if (r.DisplayTarget(fbp, fbw, psm, &image, &layout, &w, &h))
                     present(std::min(w, 640u * k), std::min(h, lines * k));
             });
             return;
@@ -2055,6 +2099,21 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
     }
     std::vector<u32> pixels;
     u32 w = 0, h = 0;
+    static const bool field_trace = std::getenv("PS2HOST_FIELD_TRACE") != nullptr;
+    if (field_trace && g_bridge && gs.Displayed(&fbp, &fbw, &psm)) {
+        auto found = g_bridge->owned.find(std::make_tuple(fbp, fbw, psm, false));
+        std::fprintf(stderr, "[field] %llu software picture: fbp %X fbw %u psm %X %s why %d serial %llu;", (unsigned long long)frame,
+                     unsigned(fbp), unsigned(fbw), unsigned(psm),
+                     found == g_bridge->owned.end() ? "not the GPU's" : found->second.stale ? "stale" : "?",
+                     found == g_bridge->owned.end() ? -1 : found->second.why,
+                     (unsigned long long)(found == g_bridge->owned.end() ? 0 : found->second.drawn_serial));
+        for (const auto& [key, o] : g_bridge->owned)
+            if (o.begin < 0x50 * 32 + 1 && std::get<0>(key) < 0x50)
+                std::fprintf(stderr, " [%X/%u/%X%s %s why %d serial %llu]", unsigned(std::get<0>(key)),
+                             unsigned(std::get<1>(key)), unsigned(std::get<2>(key)), std::get<3>(key) ? " Z" : "",
+                             o.stale ? "stale" : "ok", o.why, (unsigned long long)o.drawn_serial);
+        std::fprintf(stderr, "\n");
+    }
     if (gs::TheGs().Picture(&pixels, &w, &h)) display.Present(pixels.data(), w, h);
 }
 
