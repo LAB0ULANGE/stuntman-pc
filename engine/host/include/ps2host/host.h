@@ -117,8 +117,9 @@ struct Options {
     /* --vif1-stc-no-wait on|off: else the "vif1_stc_no_wait" setting's, on (SetVif1StcNoWait). */
     std::string vif1_stc_no_wait;
     std::string vu_record;         /* --vu-record: the microprograms run, for vurecomp.py */
-    /* --deinterlace weave|off: field mode's pictures, both fields woven as a
-       television shows them, or each alone, its lines doubled. Played (a
+    /* --deinterlace weave|auto|off: field mode's pictures, both fields woven
+       as a television shows them, woven only while each field is a new
+       picture (Gs::weave_auto), or each alone, its lines doubled. Played (a
        window in real time), the "deinterlace" setting's, weave by default;
        else off. */
     std::string deinterlace;

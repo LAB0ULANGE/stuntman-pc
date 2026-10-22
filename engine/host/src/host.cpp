@@ -684,7 +684,8 @@ int Run(const Options& options) {
         const std::string mode = !options.deinterlace.empty() ? options.deinterlace
                                  : played                      ? Setting("deinterlace", "weave")
                                                                : "off";
-        gs::TheGs().weave = mode == "weave";
+        gs::TheGs().weave = mode == "weave" || mode == "auto";
+        gs::TheGs().weave_auto = mode == "auto";
     }
     if (!options.memcard.empty()) mc2::SetCardDirectory(options.memcard);
     if (options.vu_interpret) Vu1().use_compiled = Vu0().use_compiled = false;

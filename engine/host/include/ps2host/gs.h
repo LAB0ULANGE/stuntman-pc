@@ -149,6 +149,12 @@ public:
     bool Picture(std::vector<u32>* pixels, u32* width, u32* height) const;
     bool weave = false;
     u32 weave_parity = 0;
+    /* With `weave`, on the GPU's window (deinterlace=auto): woven only while
+       each field brings a new picture (Stuntman's menus, 50 a second); one
+       held two fields or more (its stunt, 25) shown alone, as drawn - woven,
+       it went onto the other field's lines half a line off, and every other
+       field beside the picture before: edges that flicker at 50 Hz. */
+    bool weave_auto = false;
     /* How many lines of the frame buffer the display shows. */
     u32 ShownLines() const;
     /* Interlaced, field mode (SMODE2 INT and FFMD): a field a frame. */

@@ -1976,8 +1976,14 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
             const u32 dby = weave ? gs.DisplayedDby() : 0, parity = u32(frame + 1) & 1;
             const u32 lines = std::min(shown_lines, 448u);
             static u64 shown_serial = 0;
+            static bool fresh_before = false;
             const bool fresh = found->second.drawn_serial != shown_serial;
             shown_serial = found->second.drawn_serial;
+            // weave_auto: a field to the woven picture only when it is a new
+            // one, and that shown only when the field before was one too.
+            const bool weave_in = weave && (!gs.weave_auto || fresh);
+            const bool woven = weave && (!gs.weave_auto || (fresh && fresh_before));
+            fresh_before = fresh;
             ps2gpu::Display* shown = &display;
             g_bridge->renderer->Then([=](ps2gpu::GsRenderer& r) {
                 std::uint64_t image = 0;
@@ -1990,7 +1996,8 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
                     if (due_ns) shown->PresentImageAt(image, layout, width, height, due_ns);
                     else shown->PresentImage(image, layout, width, height);
                 };
-                if (weave && r.WeaveField(fbp, fbw, psm, dby, shown_lines, parity, &image, &layout, &w, &h))
+                if (weave_in && r.WeaveField(fbp, fbw, psm, dby, shown_lines, parity, &image, &layout, &w, &h) &&
+                    woven)
                     present(std::min(w, 640u * k), h);
                 else if (r.DisplayTarget(fbp, fbw, psm, &image, &layout, &w, &h))
                     present(std::min(w, 640u * k), std::min(h, lines * k));
@@ -2008,12 +2015,18 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
         int layout = 0;
         u32 w = 0, h = 0;
         const u32 k = g_bridge->renderer->Scale();
+        static u64 shown_serial = 0;
+        static bool fresh_before = false;
+        const bool fresh = found != g_bridge->owned.end() && found->second.drawn_serial != shown_serial;
+        const bool woven = !gs.weave_auto || (fresh && fresh_before);
+        fresh_before = fresh;
+        if (fresh) shown_serial = found->second.drawn_serial;
         if (gs.FieldMode() && lines <= 512 && found != g_bridge->owned.end() && !found->second.stale &&
+            (!gs.weave_auto || fresh) &&
             g_bridge->renderer->WeaveField(fbp, fbw, psm, gs.DisplayedDby(), lines, u32(frame + 1) & 1, &image,
-                                           &layout, &w, &h)) {
-            static u64 shown_serial = 0;
-            CountPresentedPicture(found->second.drawn_serial != shown_serial);
-            shown_serial = found->second.drawn_serial;
+                                           &layout, &w, &h) &&
+            woven) {
+            CountPresentedPicture(fresh);
             if (due_ns) display.PresentImageAt(image, layout, std::min(w, 640u * k), h, due_ns);
             else display.PresentImage(image, layout, std::min(w, 640u * k), h);
             return;
