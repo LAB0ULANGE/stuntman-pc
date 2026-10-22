@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace ps2host {
@@ -222,7 +223,7 @@ inline void Store(u8* bytes, u32 within, u32 page, u32 value) {
     } else {
         u8* p = &bytes[(page * 256 + within) & kMask];
         if constexpr (Psm == PSMCT32 || Psm == PSMZ32) {
-            p[0] = u8(value); p[1] = u8(value >> 8); p[2] = u8(value >> 16); p[3] = u8(value >> 24);
+            std::memcpy(p, &value, 4);          // (little-endian: the four bytes in order, one store)
         } else if constexpr (Psm == PSMCT24 || Psm == PSMZ24) {
             p[0] = u8(value); p[1] = u8(value >> 8); p[2] = u8(value >> 16);
         } else if constexpr (Psm == PSMT8) {
@@ -234,7 +235,8 @@ inline void Store(u8* bytes, u32 within, u32 page, u32 value) {
         } else if constexpr (Psm == PSMT4HH) {
             p[3] = u8((p[3] & 0x0F) | (value << 4));
         } else {  // the 16-bit formats
-            p[0] = u8(value); p[1] = u8(value >> 8);
+            const std::uint16_t half = std::uint16_t(value);
+            std::memcpy(p, &half, 2);
         }
     }
 }
