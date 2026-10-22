@@ -209,6 +209,14 @@ private:
     VkCommandBuffer cmd_ = VK_NULL_HANDLE;
     VkSemaphore acquired_ = VK_NULL_HANDLE;
     VkFence fence_ = VK_NULL_HANDLE;
+    /* An image acquired and its command buffer begun, not yet submitted
+       (BeginPresent with nothing then to show): the next BeginPresent takes
+       it again. Ended unsubmitted, its fence - reset - was never signalled,
+       and the present kInFlight later waited for it for ever (the GS thread
+       behind it, the VIF1 worker, the EE: Stuntman's trailer, its pictures
+       changing size between the movie and the replays). */
+    bool begun_ = false;
+    std::uint32_t begun_index_ = 0;
     VkPresentModeKHR mode_ = VK_PRESENT_MODE_FIFO_KHR;
     std::atomic<bool> vsync_{false};        // FIFO when set (SetVsync)
     std::atomic<bool> present_wait_{true};  // SetPresentWait
@@ -589,6 +597,10 @@ bool VulkanDisplay::BeginPresent(std::uint32_t* index, bool* ok) {
         *ok = false;
         return false;
     }
+    if (begun_) {
+        *index = begun_index_;
+        return true;
+    }
     if (stale_ && !CreateSwapchain()) {
         *ok = false;
         return false;
@@ -616,6 +628,8 @@ bool VulkanDisplay::BeginPresent(std::uint32_t* index, bool* ok) {
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd_, &begin);
+    begun_ = true;
+    begun_index_ = *index;
     return true;
 }
 
@@ -695,10 +709,7 @@ bool VulkanDisplay::Present(const std::uint32_t* pixels, std::uint32_t width, st
     std::uint32_t index = 0;
     bool ok = true;
     if (!BeginPresent(&index, &ok)) return ok;
-    if (!EnsurePicture(width, height)) {
-        vkEndCommandBuffer(cmd_);
-        return false;
-    }
+    if (!EnsurePicture(width, height)) return false;      // (the image kept, begun_)
     // One staging buffer and picture for all: what an earlier present still
     // copies from goes first.
     for (int i = 0; i < kInFlight; ++i)
@@ -932,15 +943,15 @@ void VulkanDisplay::PresentLoop() {
         {
             std::lock_guard<std::mutex> hold(paced_lock_);
             if (stop_) {
-                if (began) vkEndCommandBuffer(cmd_);
+                if (began) {
+                    vkEndCommandBuffer(cmd_);
+                    begun_ = false;
+                }
                 return;
             }
             // The oldest waiting now (a newer one may have taken its turn
             // meanwhile): into the image already taken.
-            if (ready_.empty()) {
-                if (began) vkEndCommandBuffer(cmd_);
-                continue;
-            }
+            if (ready_.empty()) continue;      // the image kept for the next (begun_)
             slot = ready_.front();
             ready_.pop_front();
             taken_ = slot;
@@ -970,6 +981,7 @@ void VulkanDisplay::PresentLoop() {
 
 bool VulkanDisplay::Submit(std::uint32_t index) {
     vkEndCommandBuffer(cmd_);
+    begun_ = false;
     const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.waitSemaphoreCount = 1;
