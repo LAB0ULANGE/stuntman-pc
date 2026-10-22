@@ -3672,6 +3672,7 @@ std::string GpuProfileReport() {
 
 void SetBarrierDedupe(bool on) { g_barrier_dedupe = on; }
 void SetBarrierStages(bool on) { g_barrier_stages = on; }
+void SetGpuRing(int slots) { g_ring_slots = std::clamp(slots, 2, VulkanGpu::kSlots); }
 
 std::string RendererCounters() {
     static std::uint64_t last[7] = {};

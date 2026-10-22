@@ -74,6 +74,9 @@ inline void CountWait(const char* why, double seconds) {
 
 #include "command_stream.h"
 
+/* The submission ring's length a VulkanGpu takes as it starts (SetGpuRing). */
+inline int g_ring_slots = 3;
+
 class VulkanGpu final : public Gpu {
 public:
     ~VulkanGpu() override;
@@ -123,7 +126,10 @@ public:
     }
     /* Counts command buffers begun: what was set in one is not in the next. */
     std::uint64_t recording_id() const { return recordings_; }
-    static constexpr int kSlots = 3;
+    /* Command buffers made (kSlots) and those the ring goes round (slots_,
+       g_ring_slots as the GPU starts: the gpu_ring setting, 3 by default). */
+    static constexpr int kSlots = 8;
+    int slots() const { return slots_; }
     /* The command buffer recording goes into (or will). */
     int slot() const { return current_; }
     /* Records with `record`, submits, and waits for it to finish. */
@@ -162,6 +168,7 @@ private:
     std::vector<int> marks_[kSlots];
     std::vector<std::function<void()>> after_submit_;
     int current_ = 0;
+    int slots_ = 3;
     bool in_flight_[kSlots] = {};
     std::vector<std::function<void()>> slot_done_[kSlots];
     CommandStream* stream_ = nullptr;       // SetRecordThread
@@ -275,7 +282,7 @@ inline bool VulkanGpu::Flush() {
         for (auto& f : slot_done_[current_]) f();
         slot_done_[current_].clear();
     }
-    current_ = (current_ + 1) % kSlots;
+    current_ = (current_ + 1) % slots_;
     cmd = cmds[current_];
     return Retire(current_, "a full ring") && ok;
 }
@@ -283,7 +290,7 @@ inline bool VulkanGpu::Flush() {
 inline bool VulkanGpu::Submit(const char* why) {
     bool ok = Flush();
     // Oldest first: current_ is free, the one after it was handed over first.
-    for (int i = 1; i <= kSlots; ++i) ok = Retire((current_ + i) % kSlots, why) && ok;
+    for (int i = 1; i <= slots_; ++i) ok = Retire((current_ + i) % slots_, why) && ok;
     std::vector<std::function<void()>> done;        // waited on nothing recorded
     done.swap(after_submit_);
     for (auto& f : done) f();
@@ -294,7 +301,7 @@ inline bool VulkanGpu::SetRecordThread(bool on) {
     if (on == (stream_ != nullptr)) return on;
     Submit("the recording thread");
     if (on) {
-        stream_ = new CommandStream(cmds, kSlots);
+        stream_ = new CommandStream(cmds, slots_);
         g_stream = stream_;
     } else {
         g_stream = nullptr;

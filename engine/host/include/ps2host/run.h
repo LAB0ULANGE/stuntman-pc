@@ -244,6 +244,9 @@ void SetTextureReuse(bool on);
    renderer's own stages rather than all commands ("precise"): the
    "barriers" setting. */
 void SetBarriers(const std::string& mode);
+/* The GPU's submission ring, 2 to 8 command buffers (the "gpu_ring" setting,
+   3 by default); before the GPU starts. */
+void SetGpuRing(int slots);
 /* The GPU images newer than local memory kept in a list (the "newer_list"
    setting, on by default; --newer-list on|off), not looked for among all. */
 void SetNewerList(bool on);

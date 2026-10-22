@@ -701,6 +701,7 @@ int Run(const Options& options) {
     if (options.gpu || options.gpu_shadow) {
         std::string error;
         const GpuMode mode = options.gpu ? GpuMode::Primary : options.gpu_shadow_rtt ? GpuMode::ShadowRtt : GpuMode::Shadow;
+        SetGpuRing(std::atoi(Setting("gpu_ring", std::getenv("PS2HOST_GPU_RING") ? std::getenv("PS2HOST_GPU_RING") : "3").c_str()));
         if (!StartGpuRenderer(&error, mode, options.gpu_show))
             std::fprintf(stderr, "%s: %s\n", options.gpu ? "--gpu" : "--gpu-shadow", error.c_str());
         ApplyRendererSettings(options);

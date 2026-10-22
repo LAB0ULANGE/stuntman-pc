@@ -26,7 +26,7 @@ inline thread_local std::uint64_t g_cmd_work = 0;
 class CommandStream {
 public:
     explicit CommandStream(const VkCommandBuffer* owned, int count) {
-        for (int i = 0; i < count && i < 4; ++i) owned_[i] = owned[i];
+        for (int i = 0; i < count && i < kOwned; ++i) owned_[i] = owned[i];
         write_ = read_ = NewBlock();
         // PS2GPU_STREAM_DELAY_US (tests): the thread that slow, at each run of
         // calls - what waits for it must wait.
@@ -44,7 +44,11 @@ public:
         delete read_;
         for (Block* b : free_) delete b;
     }
-    bool Owns(VkCommandBuffer c) const { return c == owned_[0] || c == owned_[1] || c == owned_[2] || c == owned_[3]; }
+    bool Owns(VkCommandBuffer c) const {
+        for (VkCommandBuffer o : owned_)
+            if (c == o) return true;
+        return false;
+    }
 
     /* `call(payload)` on the thread, in turn; `bytes` of `data` copied to
        its payload first. */
@@ -163,7 +167,8 @@ private:
         }
     }
 
-    VkCommandBuffer owned_[4] = {};
+    static constexpr int kOwned = 8;        // (VulkanGpu::kSlots)
+    VkCommandBuffer owned_[kOwned] = {};
     Block* write_ = nullptr;        // the renderer's thread's
     std::size_t write_at_ = 0;
     Block* read_ = nullptr;         // the recording thread's

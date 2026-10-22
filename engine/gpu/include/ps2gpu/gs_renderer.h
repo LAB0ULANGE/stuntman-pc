@@ -410,6 +410,11 @@ void SetBarrierDedupe(bool on);
 /* Those barriers between the stages the renderer records work in rather
    than all commands (true: "barriers=precise"). */
 void SetBarrierStages(bool on);
+/* The command buffers handed to the GPU at once before the next waits, 2 to
+   8 (the "gpu_ring" setting, 3 by default): taken as the GPU starts. Each
+   field woven (deinterlace=weave) is a submission of its own - with 3, the
+   ring held about one picture of a game drawing every other blank. */
+void SetGpuRing(int slots);
 /* The GPU's time on the frames' command buffers, in all (nanoseconds; 0
    where the GPU keeps no time). */
 std::uint64_t GpuBusyNanoseconds();

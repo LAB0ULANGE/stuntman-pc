@@ -2330,6 +2330,11 @@ void SetBarriers(const std::string& mode) {
         std::fprintf(stderr, "[gpu] barriers=precise: between the renderer's stages, none with nothing since the last\n");
 }
 
+void SetGpuRing(int slots) {
+    ps2gpu::SetGpuRing(slots);
+    if (slots != 3) std::fprintf(stderr, "[gpu] gpu_ring=%d: command buffers handed to the GPU at once\n", slots);
+}
+
 void SetTextureCache(const std::string& mode) {
     if (!g_bridge) return;
     g_bridge->texture_cache = mode == "off"     ? Bridge::TextureCache::kOff

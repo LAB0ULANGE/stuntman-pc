@@ -5,6 +5,7 @@
 
 #include "gpu_internal.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 #include <cstdio>
@@ -15,6 +16,7 @@ namespace ps2gpu {
 void SetGpuWaitObserver(GpuWaitObserver observer) { g_wait_observer = observer; }
 
 bool VulkanGpu::Init(std::string* error) {
+    slots_ = std::clamp(g_ring_slots, 2, kSlots);
     auto fail = [&](const char* what, VkResult r) {
         char text[160];
         std::snprintf(text, sizeof text, "%s failed (VkResult %d)", what, int(r));
@@ -150,6 +152,7 @@ void VulkanGpu::MakeTimestamps() {
 bool VulkanGpu::InitShared(VkInstance shared_instance, VkPhysicalDevice shared_gpu, VkDevice shared_device,
                            std::uint32_t shared_family, VkQueue shared_queue, bool shared_dual_source,
                            const std::string& describe, std::string* error) {
+    slots_ = std::clamp(g_ring_slots, 2, kSlots);
     owns_device = false;
     instance = shared_instance;
     gpu = shared_gpu;
