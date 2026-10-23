@@ -51,6 +51,7 @@
 #include "ps2host/memory.h"
 #include "ps2host/run.h"
 #include "ps2host/profile.h"
+#include "ps2host/settings.h"
 
 namespace ps2host {
 
@@ -329,8 +330,18 @@ void DeliverPendingDmac() {
     }
 }
 
+// blank_wake: the spend raised as well on a flag the EE only reads
+// (Context::wake). The budget alone could be lost: in a tight loop - the
+// game's wait for its blank counter to change - the EE's decrements queue
+// in its core's store buffer while the timer's 0 takes the cache line, and
+// land on it after: the next loop head reads its own count, never the 0.
+// Stuntman's menus took one blank in ten 5 to 50 ms late (twenty spends
+// lost), a picture held 3 fields instead of 1.
+std::atomic<bool> g_blank_wake{false};
 void SpendBudget(lifted::Context& c) {
     reinterpret_cast<std::atomic<s64>*>(&c.budget)->store(0);
+    if (g_blank_wake.load(std::memory_order_relaxed))
+        reinterpret_cast<std::atomic<u32>*>(&c.wake)->store(1, std::memory_order_release);
 }
 
 std::atomic<u64> g_lost_vblanks{0};
@@ -369,6 +380,11 @@ void StopTimer() {
 // late the EE took it - and what it did meanwhile, for the sampler.
 std::atomic<u64> g_blank_due_ns{0};
 const bool g_hitch_blanks = std::getenv("PS2HOST_HITCH") != nullptr;
+// ...how often the timer spent the EE's budget meanwhile, the budget it
+// found before its last spend (a spend lost: the EE's count, not 0), and
+// the loop heads the EE reached with the blank due.
+std::atomic<u32> g_hitch_spends{0}, g_hitch_heads_due{0};
+std::atomic<s64> g_hitch_before{0};
 
 // PS2HOST_BLANK_LOG: each real-time blank as the timer marks it due and as
 // the EE takes it, on the steady clock in milliseconds (as --watch then
@@ -398,10 +414,16 @@ bool TakeVblank(Scheduler& s) {
     if (g_hitch_blanks) {
         const u64 due = g_blank_due_ns.load(std::memory_order_relaxed), now = ClockNs();
         if (due && now > due + 4'000'000) {
-            SampleOnly(due + 500'000, now);
-            std::fprintf(stderr, "[hitch] a blank taken %.1f ms late\n", (now - due) / 1e6);
+            // the sampler's clock is the steady one, not the game's (offset since real time began)
+            const u64 steady = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+            SampleOnly(due + 500'000 + (steady - now), steady);
+            std::fprintf(stderr, "[hitch] a blank taken %.1f ms late (budget spent %u times, %lld before the last; %u loop heads with it due)\n",
+                         (now - due) / 1e6, g_hitch_spends.load(), (long long)g_hitch_before.load(), g_hitch_heads_due.load());
         }
         g_blank_due_ns.store(0, std::memory_order_relaxed);
+        g_hitch_spends = 0;
+        g_hitch_heads_due = 0;
     }
     u32 owed = s.vblank_owed.load();
     while (owed && !s.vblank_owed.compare_exchange_weak(owed, owed - 1)) {
@@ -539,8 +561,16 @@ void VblankTimer() {
             if (g_blank_log) LogBlankDue(due_ms, s.vblank_owed.load(), lost);
         }
         if (timer >= 0 && (!retrying || clock::now() >= timer_at)) s.timer_due = true;
-        if (lifted::Context* c = s.running.load())
-            if (!retrying || s.vblank_due.load() || s.timer_due.load()) SpendBudget(*c);
+        if (lifted::Context* c = s.running.load()) {
+            if (!retrying || s.vblank_due.load() || s.timer_due.load()) {
+                const s64 before = reinterpret_cast<std::atomic<s64>*>(&c->budget)->load();
+                SpendBudget(*c);
+                if (g_hitch_blanks && s.vblank_due.load()) {
+                    g_hitch_spends.fetch_add(1, std::memory_order_relaxed);
+                    g_hitch_before.store(before, std::memory_order_relaxed);
+                }
+            }
+        }
         TimerTick();
     }
 }
@@ -575,6 +605,8 @@ void LoopHead(lifted::Context& c, u32 address) {
     Scheduler& s = S();
     if (StopRequested() || s.in_interrupt || !s.current || &c != &s.current->context)
         throw lifted::Abort{address, 2};
+    if (c.wake) reinterpret_cast<std::atomic<u32>*>(&c.wake)->store(0);
+    if (g_hitch_blanks && s.vblank_due.load()) g_hitch_heads_due.fetch_add(1, std::memory_order_relaxed);
     const bool idle = s.virtual_time && IdleLoops().count(address) != 0;
     // Real time in an idle loop (a game's wait for an interrupt - Burnout 3's
     // for its next picture's vertical blank, 60% of the EE's time in its
@@ -851,6 +883,7 @@ void StartRealTime() {
     s.realtime = s.loop_budget == INT64_MAX;
     s.vblank_due = false;
     s.timer_due = false;
+    g_blank_wake = s.realtime && SettingOn("blank_wake", false);
     for (auto& [id, t] : s.threads) t->context.budget = s.loop_budget;
     if (s.realtime) StartRealTimeThreads();
     std::fprintf(stderr, "[host] real time from frame %llu\n", (unsigned long long)s.frames);
@@ -865,6 +898,7 @@ void RunThreads(const lifted::Context& initial, u32 entry, s64 loop_budget) {
     StartCop0();
     s.virtual_time = VirtualClock();
     s.realtime = loop_budget == INT64_MAX && !s.virtual_time;
+    g_blank_wake = s.realtime && SettingOn("blank_wake", false);
     if (s.realtime) StartRealTimeThreads();
     s.next_vblank_ns = ClockNs() + kFrameNs;
     s.host_fiber = ConvertThreadToFiber(nullptr);

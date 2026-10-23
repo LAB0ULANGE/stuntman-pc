@@ -36,6 +36,9 @@ struct Context {
     u32 vc[32];     /* VU0 control registers: VI0-VI15, then R (20), I (21), Q (22) */
     u32 vacc[4];    /* VU0 accumulator */
     u32 sa;         /* the shift amount qfsrv uses, in bits */
+    u32 wake;       /* nonzero: the host wants the next loop head. Written from
+                       another thread, only read here: a spent budget can be
+                       lost (a loop's decrement stores over it), this cannot */
 };
 
 /* Thrown, and caught at the entry point, when a run cannot go on: a trap
@@ -83,7 +86,7 @@ void BudgetSpent(Context& c, u32 address);
 
 /* At every loop head, so a loop that never ends cannot hang the host. */
 inline void Tick(Context& c, u32 address) {
-    if (--c.budget < 0) BudgetSpent(c, address);
+    if (--c.budget < 0 || *(volatile const u32*)&c.wake) BudgetSpent(c, address);
 }
 
 inline void Trap(u32 address) { throw Abort{address, 1}; }
