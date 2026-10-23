@@ -1,0 +1,53 @@
+diff --git a/engine/host/src/mcserv.cpp b/engine/host/src/mcserv.cpp
+index 997618f..abe62d4 100644
+--- a/engine/host/src/mcserv.cpp
++++ b/engine/host/src/mcserv.cpp
+@@ -55,6 +55,7 @@
+ #include "ps2host/mc2.h"
+ #include "ps2host/memory.h"
+ #include "ps2host/run.h"
++#include "ps2host/settings.h"
+ 
+ namespace ps2host {
+ 
+@@ -75,6 +76,11 @@ struct Card {
+     std::map<s32, Open> files;
+     std::string current = "/";
+     bool seen = false;                      // a getinfo has reported the card once
++    // mc_info_cache: the card's directory made and its used size counted
++    // once, not at each getinfo - Stuntman's menus ask seven times a
++    // frame, each a walk of the card's folder (most of the EE's time when
++    // the disk is slow). Any other call may change the card: counted again.
++    s64 used_kb = -1;
+     std::vector<fs::path> listing;          // getdir's matches, for "go on"
+     std::size_t listed = 0;
+ };
+@@ -184,6 +190,7 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& data) {
+     Card& card = C();
+     Memory& m = GuestMemory();
+     std::error_code error;
++    if (procedure != 0x01) card.used_kb = -1;
+     switch (procedure) {
+         case 0xFE: {
+             std::vector<u8> out = Result(0);
+@@ -195,10 +202,18 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& data) {
+         case 0x01: {
+             const u32 port = At(data, 4), slot = At(data, 8), info = At(data, 0x1C);
+             const bool present = Present(port, slot);
+-            if (present) fs::create_directories(fs::u8path(mc2::CardDirectory()), error);
++            static const bool cache = SettingOn("mc_info_cache", false);
++            if (present && (!cache || card.used_kb < 0)) fs::create_directories(fs::u8path(mc2::CardDirectory()), error);
+             if (info) {
++                u32 used = 0;
++                if (present && cache) {
++                    if (card.used_kb < 0) card.used_kb = UsedKb();
++                    used = u32(card.used_kb);
++                } else if (present) {
++                    used = UsedKb();
++                }
+                 m.Write(info + 0, present ? 2 : 0, 4);                     // a PS2 card
+-                m.Write(info + 4, present ? kCardKb - std::min(kCardKb, UsedKb()) : 0, 4);
++                m.Write(info + 4, present ? kCardKb - std::min(kCardKb, used) : 0, 4);
+                 m.Write(info + 0x90, present ? 1 : 0, 4);                  // formatted
+             }
+             if (!present) return Result(kNoCard);
