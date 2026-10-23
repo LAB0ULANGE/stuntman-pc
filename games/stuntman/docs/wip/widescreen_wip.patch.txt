@@ -1,8 +1,0 @@
-Écran large, essai du 23/10 (laissé) :
-- 0x001D4C88 (réglage caméra) charge l'aspect 4/3 (0x3FAAAAAB, à 0x001D4CD8) et
-  appelle 0x001D6440 (projection : x = a1/2/tan(fov/2), y = a2*aspect/a1 * x)
-  et 0x001D6008. Seul appelant des deux. Appelée à chaque image, y compris en
-  cascade (fov 60°).
-- Changer f13 (aspect) ou a1 (0x200 -> 0x100) dans 0x001D6440 : image
-  identique. Cette matrice ne fait pas l'image ; la projection du rendu est
-  ailleurs (à chercher : ce que lit le microcode VU1).
