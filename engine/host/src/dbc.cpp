@@ -48,6 +48,7 @@
 #include "ps2host/host.h"
 #include "ps2host/memory.h"
 #include "ps2host/run.h"
+#include "ps2host/settings.h"
 
 namespace ps2host {
 
@@ -97,6 +98,20 @@ const std::pair<int, int> kKeys[] = {
 
 bool Pressed(int key) { return WindowFocused() && HostKeyDown(key); }
 
+// The inputs' names, in libpad's order (--press, left_trigger=, right_trigger=).
+const char* const kNames[16] = {"select", "l3", "r3", "start", "up", "right", "down", "left",
+                                "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"};
+
+// left_trigger= / right_trigger= (pc_settings.ini): the controller's trigger
+// as another input - cross, square, ... - instead of L2 / R2, its travel that
+// input's pressure. Unset (or not a name): the trigger stays L2 / R2.
+int TriggerInput(const char* key, int fallback) {
+    const std::string name = Setting(key, "");
+    for (int i = 0; i < 16; ++i)
+        if (name == kNames[i]) return i;
+    return fallback;
+}
+
 // Scripted presses (--press): (input, first frame, last frame).
 struct Press { int input; u64 from, to; };
 std::vector<Press>& Script() {
@@ -115,22 +130,33 @@ void PadData(u8* data) {
         if (g_frame >= p.from && g_frame <= p.to) buttons &= u16(~(1u << p.input));
     HostPadState pad;
     const bool controller = HostPad(&pad);
-    buttons &= u16(~pad.buttons);
+    // The triggers apart: each is the input it is set to, at its travel.
+    static const int left = TriggerInput("left_trigger", 8), right = TriggerInput("right_trigger", 9);
+    u16 triggers = 0;
+    u8 travel[16] = {};
+    if (controller) {
+        if (pad.buttons & (1u << 8)) triggers |= u16(1u << left), travel[left] = std::max(travel[left], pad.l2);
+        if (pad.buttons & (1u << 9)) triggers |= u16(1u << right), travel[right] = std::max(travel[right], pad.r2);
+    }
+    buttons &= u16(~(pad.buttons & ~0x0300u));
     if (g_pad_hook) buttons &= u16(~g_pad_hook());
+    const u16 full = u16(~buttons);                         // held other than by a trigger
+    buttons &= u16(~triggers);
     g_held = u16(~buttons);
     data[0] = u8(buttons);
     data[1] = u8(buttons >> 8);
     // Then, as libpad's DualShock 2 report has them: the sticks (right X, Y,
     // left X, Y), centred without a controller, and the pressure of the
     // pressure-sensitive buttons - right, left, up, down, triangle, circle,
-    // cross, square, L1, R1, L2, R2 - full when pressed, the triggers' own
-    // travel for L2 and R2. (Sticks read as 0 are pushed fully up and left:
-    // with them there, the frontend saw input held and never a press.)
+    // cross, square, L1, R1, L2, R2 - full when pressed, a trigger's travel
+    // for the input only it holds. (Sticks read as 0 are pushed fully up and
+    // left: with them there, the frontend saw input held and never a press.)
     for (u32 i = 2; i < 6; ++i) data[i] = controller ? pad.sticks[i - 2] : 0x80;
     static const int kPressure[12] = {5, 7, 4, 6, 12, 13, 14, 15, 10, 11, 8, 9};
-    for (u32 i = 0; i < 12; ++i) data[6 + i] = (buttons >> kPressure[i]) & 1 ? 0 : 0xFF;
-    if (controller && pad.l2 && !(buttons & (1u << 8))) data[6 + 10] = std::max<u8>(pad.l2, 1);
-    if (controller && pad.r2 && !(buttons & (1u << 9))) data[6 + 11] = std::max<u8>(pad.r2, 1);
+    for (u32 i = 0; i < 12; ++i) {
+        const int input = kPressure[i];
+        data[6 + i] = (full >> input) & 1 ? 0xFF : (triggers >> input) & 1 ? std::max<u8>(travel[input], 1) : 0;
+    }
 }
 
 std::vector<u8> Server(u32 procedure, const std::vector<u8>& request) {
@@ -360,8 +386,6 @@ void PadmanFrame() {
 }  // namespace
 
 bool ScriptPress(const std::string& button, u64 from, u64 to) {
-    static const char* const kNames[16] = {"select", "l3", "r3", "start", "up", "right", "down", "left",
-                                           "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"};
     for (int i = 0; i < 16; ++i)
         if (button == kNames[i]) {
             Script().push_back({i, from, to});

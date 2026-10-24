@@ -75,7 +75,9 @@ are.
 Controls
 --------
 
-A game controller works as a DualShock 2 (with rumble). Keyboard: arrow keys
+A game controller works as a DualShock 2 (with rumble); its right trigger
+accelerates and its left one brakes (right_trigger= and left_trigger= in
+pc_settings.ini: remove them for L2 and R2). Keyboard: arrow keys
 the D-pad, X Cross, C Circle, Z Square, V Triangle, Enter Start, Backspace
 Select, Q / E L1 / R1, 1 / 3 L2 / R2.
 
