@@ -1,7 +1,7 @@
 {
   "name": "Stuntman (SLES-50288)",
   "title": "Stuntman",
-  "version": "0.0.1-dev",
+  "version": "0.1.0-alpha",
   "iso": "../../../ps2 iso/Stuntman (Europe) (En,Fr,De,Es,It).iso",
   "executable": "SLES_502.88"
 }
