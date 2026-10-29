@@ -194,6 +194,17 @@ u32 IntFromFloat(u32 float_bits);
 /* Interprets a bit pattern as a float, for use in comparisons. */
 float FloatValue(u32 bits);
 
+/* The FPU's model (eefpu.cpp): false (the default) each result exact, then
+   rounded toward zero; true the hardware's datapaths bit for bit (the
+   float_model=ps2 setting, or PS2RT_EE_FLOAT=ps2). The Ps2Float* forms are
+   that model whatever is chosen (lifted code's FloatRsqrt, the tests). */
+void SetFloatModel(bool ps2);
+bool Ps2FloatModel();
+u32 Ps2FloatAdd(u32 a, u32 b);
+u32 Ps2FloatMul(u32 a, u32 b);
+u32 Ps2FloatDiv(u32 a, u32 b);
+u32 Ps2FloatSqrt(u32 a);
+
 /* The bit pattern of a float constant, so the source can say `FloatBits(-1.0f)`
    rather than `0xBF800000`. Every literal emitted converts back exactly. */
 u32 FloatBits(float value);

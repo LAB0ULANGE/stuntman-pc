@@ -36,7 +36,7 @@ RUNTIME = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # The runtime sources derived code is linked with - one list, so no tool that
 # compiles derived code can forget one (it once linked without the VU0 helpers).
 RUNTIME_SOURCES = [os.path.join(RUNTIME, "src", name)
-                   for name in ("eefpu.cpp", "eeint.cpp", "vu0.cpp")]
+                   for name in ("eefpu.cpp", "ps2fpu.cpp", "eeint.cpp", "vu0.cpp")]
 
 VSWHERE = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 

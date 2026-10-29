@@ -1303,6 +1303,44 @@ void HostServersSendCommandsAfterTheirAnswer() {
     Check(!ps2host::DeliverIopReply(), "nothing more");
 }
 
+// float_model=ps2 (eefpu.cpp): the FPU's datapaths bit for bit - each result
+// here as PCSX2's soft-float model (PS2Float.cpp) gives it, the same over 20
+// million random operands; where the default model (exact, then toward zero)
+// differs: 1 - 1e-10 stays 1, 1/3 rounds up, a negative root is |x|'s, and
+// by zero or past the largest the result is 0x7FFFFFFF.
+void FloatModelIsTheHardwares() {
+    struct Case { char op; u32 a, b, result; };
+    const Case cases[] = {
+        {'-', 0x3F800000u, 0x2EDBE6FFu, 0x3F800000u}, {'+', 0x3F800000u, 0xAEDBE6FFu, 0x3F800000u},
+        {'*', 0x3F8CCCCDu, 0x40533333u, 0x406851EBu}, {'*', 0x3F333333u, 0x42F6E979u, 0x42ACD6A1u},
+        {'*', 0x7F000000u, 0x40800000u, 0x7FFFFFFFu}, {'/', 0x3F800000u, 0x40400000u, 0x3EAAAAABu},
+        {'/', 0x40000000u, 0x40E00000u, 0x3E924925u}, {'/', 0x41200000u, 0x3E99999Au, 0x42055555u},
+        {'/', 0x3F800000u, 0x00000000u, 0x7FFFFFFFu}, {'r', 0x40000000u, 0, 0x3FB504F3u},
+        {'r', 0x40400000u, 0, 0x3FDDB3D7u},           {'r', 0xC0800000u, 0, 0x40000000u},
+    };
+    const bool was = generated::Ps2FloatModel();
+    generated::SetFloatModel(true);
+    bool all = true;
+    for (const Case& t : cases) {
+        const u32 got = t.op == '+' ? generated::FloatAdd(t.a, t.b) : t.op == '-' ? generated::FloatSub(t.a, t.b)
+                      : t.op == '*' ? generated::FloatMul(t.a, t.b) : t.op == '/' ? generated::FloatDiv(t.a, t.b)
+                                    : generated::FloatSqrt(t.a);
+        if (got != t.result) {
+            std::printf("  %08X %c %08X: %08X, the hardware %08X\n", t.a, t.op, t.b, got, t.result);
+            all = false;
+        }
+    }
+    generated::SetFloatModel(false);
+    Check(all, "float_model=ps2: add, sub, mul, div and sqrt as the hardware's datapaths");
+    // (port.py runs these with PS2RT_EE_ROUND_NEAREST set, from cppcheck.py.)
+    const bool nearest = std::getenv("PS2RT_EE_ROUND_NEAREST") != nullptr;
+    Check(generated::FloatSub(0x3F800000u, 0x2EDBE6FFu) == (nearest ? 0x3F800000u : 0x3F7FFFFFu) &&
+              generated::FloatDiv(0x3F800000u, 0x40400000u) == (nearest ? 0x3EAAAAABu : 0x3EAAAAAAu) &&
+              generated::FloatSqrt(0xC0800000u) == 0,
+          "the default model: exact, then toward zero (or to nearest)");
+    generated::SetFloatModel(was);
+}
+
 // padman's scePadSetActAlign (command 8, dbc.cpp): done, where libpad 2.3
 // (+0xC) and 2.4 (+0x14) read it - Stuntman's controller set-up waits on +0x14.
 void PadmanSetActAlignIsDone() {
@@ -2707,6 +2745,7 @@ int main() {
     HostServersSendCommandsAfterTheirAnswer();
     FileIoCompletesAsynchronousRequests();
     PadmanSetActAlignIsDone();
+    FloatModelIsTheHardwares();
     McservCountsFreeEntries();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();

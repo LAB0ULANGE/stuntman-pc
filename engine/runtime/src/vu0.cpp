@@ -212,8 +212,36 @@ struct MacroRounding {
     ~MacroRounding() { if (!kMacroNearest) _mm_setcsr(saved); }
 };
 
+/* float_model=ps2 (generated::SetFloatModel): the arithmetic as eefpu.cpp's
+   model of the FPU's datapaths - the VU's FMACs and divider cut their results
+   the same way (PCSX2's soft-float work takes both from one model). */
+static u32 Ps2Lane(int op, u32 a, u32 b, u32 acc) {
+    switch (op) {
+        case kAdd: return generated::Ps2FloatAdd(a, b);
+        case kSub: return generated::Ps2FloatAdd(a, b ^ 0x80000000u);
+        case kMul: return generated::Ps2FloatMul(a, b);
+        case kMadd: return generated::Ps2FloatAdd(acc, generated::Ps2FloatMul(a, b));
+        case kMsub: return generated::Ps2FloatAdd(acc, generated::Ps2FloatMul(a, b) ^ 0x80000000u);
+    }
+    return Binary(op, a, b, acc);
+}
+
+static void RunFmacPs2(Context& c, const FmacOp& f) {
+    u32 out[4] = {};
+    const u32 broadcast = f.operand < 4 ? c.vf[f.ft][f.operand]
+                        : f.operand == 4 ? c.vc[kRegQ] : f.operand == 5 ? c.vc[kRegI] : 0;
+    for (int lane = 0; lane < 4; ++lane)
+        if (f.dest & (8u >> lane))
+            out[lane] = Ps2Lane(f.op, c.vf[f.fs][lane], f.operand == 6 ? c.vf[f.ft][lane] : broadcast, c.vacc[lane]);
+    u32* to = f.to_acc ? c.vacc : f.fd ? c.vf[f.fd] : nullptr;
+    if (!to) return;
+    for (int lane = 0; lane < 4; ++lane)
+        if (f.dest & (8u >> lane)) to[lane] = out[lane];
+}
+
 void Cop2(Context& c, u32 word) {
     MacroRounding rounding;
+    const bool ps2 = generated::Ps2FloatModel();
     const u32 fd = (word >> 6) & 0x1F, fs = (word >> 11) & 0x1F, ft = (word >> 16) & 0x1F;
     const u32 dest = (word >> 21) & 0xF;
     const bool lane_on[4] = {(dest & 8) != 0, (dest & 4) != 0, (dest & 2) != 0, (dest & 1) != 0};
@@ -227,16 +255,18 @@ void Cop2(Context& c, u32 word) {
     const u32 index = funct < 0x3C ? 0 : (word & 3) | ((word >> 4) & 0x7C);
     FmacOp fmac;
     if (DecodeFmac(word, &fmac)) {
-        RunFmac(c, fmac);
+        if (ps2) RunFmacPs2(c, fmac);
+        else RunFmac(c, fmac);
         return;
     }
 
     const u32* a = c.vf[fs];
     if (funct == 0x2E) {                                   /* vopmsub */
         const u32* bb = c.vf[ft];
-        const u32 out[3] = {Binary(kMsub, a[1], bb[2], c.vacc[0]),
-                            Binary(kMsub, a[2], bb[0], c.vacc[1]),
-                            Binary(kMsub, a[0], bb[1], c.vacc[2])};
+        const auto msub = ps2 ? Ps2Lane : Binary;
+        const u32 out[3] = {msub(kMsub, a[1], bb[2], c.vacc[0]),
+                            msub(kMsub, a[2], bb[0], c.vacc[1]),
+                            msub(kMsub, a[0], bb[1], c.vacc[2])};
         if (fd != 0)
             for (int lane = 0; lane < 3; ++lane)
                 if (lane_on[lane]) c.vf[fd][lane] = out[lane];
@@ -258,9 +288,9 @@ void Cop2(Context& c, u32 word) {
     switch (index) {
         case 0x2E: {                                       /* vopmula */
             const u32* bb = c.vf[ft];
-            const u32 out[3] = {Result(Value(a[1]) * Value(bb[2])),
-                                Result(Value(a[2]) * Value(bb[0])),
-                                Result(Value(a[0]) * Value(bb[1]))};
+            const u32 out[3] = {ps2 ? generated::Ps2FloatMul(a[1], bb[2]) : Result(Value(a[1]) * Value(bb[2])),
+                                ps2 ? generated::Ps2FloatMul(a[2], bb[0]) : Result(Value(a[2]) * Value(bb[0])),
+                                ps2 ? generated::Ps2FloatMul(a[0], bb[1]) : Result(Value(a[0]) * Value(bb[1]))};
             for (int lane = 0; lane < 3; ++lane)
                 if (lane_on[lane]) c.vacc[lane] = out[lane];
             return;
@@ -293,15 +323,18 @@ void Cop2(Context& c, u32 word) {
             return;
         case 0x38: {                                       /* vdiv */
             const u32 num = c.vf[fs][fsf], den = c.vf[ft][ftf];
+            if (ps2) { c.vc[kRegQ] = generated::Ps2FloatDiv(num, den); return; }
             c.vc[kRegQ] = Value(den) == 0.0 ? ((num ^ den) & kSign) | kMax
                                             : Result(Value(num) / Value(den));
             return;
         }
         case 0x39:                                         /* vsqrt */
+            if (ps2) { c.vc[kRegQ] = generated::Ps2FloatSqrt(c.vf[ft][ftf]); return; }
             c.vc[kRegQ] = Result(std::sqrt(std::fabs(Value(c.vf[ft][ftf]))));
             return;
         case 0x3A: {                                       /* vrsqrt */
             const u32 num = c.vf[fs][fsf];
+            if (ps2) { c.vc[kRegQ] = generated::Ps2FloatDiv(num, generated::Ps2FloatSqrt(c.vf[ft][ftf])); return; }
             const double root = std::sqrt(std::fabs(Value(c.vf[ft][ftf])));
             c.vc[kRegQ] = root == 0.0 ? (num & kSign) | kMax : Result(Value(num) / root);
             return;

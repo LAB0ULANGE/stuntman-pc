@@ -8,6 +8,7 @@ set(PS2_ENGINE_DIR ${CMAKE_CURRENT_LIST_DIR}/..)
 
 add_library(ps2rt STATIC
     ${PS2_ENGINE_DIR}/runtime/src/eefpu.cpp
+    ${PS2_ENGINE_DIR}/runtime/src/ps2fpu.cpp
     ${PS2_ENGINE_DIR}/runtime/src/eeint.cpp
     ${PS2_ENGINE_DIR}/runtime/src/vu0.cpp
     ${PS2_ENGINE_DIR}/runtime/src/lifted_support.cpp)

@@ -29,6 +29,7 @@
 #include "ps2host/run.h"
 #include "ps2host/settings.h"
 #include "ps2host/timeline.h"
+#include "ps2rt/generated.h"
 
 namespace ps2host {
 
@@ -692,6 +693,10 @@ int Run(const Options& options) {
     // VU1 without the flags no instruction reads (PORTING.md's "Fast mode"):
     // --vu-fast, or the "vu_fast" setting (off unless set).
     Vu1().fast = options.vu_fast || SettingOn("vu_fast", false);
+    // The EE FPU's model (eefpu.cpp): float_model=ps2 the hardware's datapaths
+    // bit for bit, else each result exact and rounded toward zero (the default;
+    // PS2RT_EE_FLOAT=ps2 sets it too, for a scripted run).
+    if (Setting("float_model", "") == "ps2") generated::SetFloatModel(true);
     SetUntilFrame(options.until_frame);
     SetFrameTimes(options.frame_times);
     gs::TheGs().whole_qwords =

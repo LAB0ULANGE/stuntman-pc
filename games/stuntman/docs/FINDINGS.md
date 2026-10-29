@@ -193,3 +193,22 @@ frame: max(the brightest component of the ambient colour at 0x005C2180 *
 128, the level) - 0x2F (37 %) in the first stunts, hence the very dark
 shadows. The port's settings `shadows=off` and `ambient_light=NN` raise the
 ambient for that table alone (overrides.cpp, LightTable).
+
+## The chase cars: the FPU's own arithmetic (float_model=ps2)
+
+The cars the player follows replay controller inputs recorded on a PS2
+through the game's physics: any difference in the float arithmetic grows
+until the car leaves its line, hits a wall and stays there (reported in the
+film "Bagnoles, whisky et nitro", the "tire-bouchon" stunt; PCSX2 shows the
+same). The port's default FPU model is the exact result rounded toward
+zero, as PCSX2's; the hardware is not quite that: its divider and square
+root (radix-2 SRT, no correction step) give another last bit for 38 % and
+22 % of operands in the game's range, its multiplier (Booth, low
+partial-product bits dropped) for 0.1 %, and its adder cuts the smaller
+operand below one guard bit (1 - 1e-10 stays 1). `float_model=ps2`
+(engine/runtime/src/ps2fpu.cpp, written from the hardware's description in
+engine/docs/PS2FPU.md; identical to PCSX2's soft-float model, pull request
+12001, over 40 million operands) computes the FPU
+and VU0 macro instructions so. The game's code has 15k add, 11k sub, 21k
+mul, 1.2k div and 0.5k sqrt sites (no madd), and 416 VU0 macro ones. Cost
+in the first stunt (code defaults, windowed): 16.4 -> 15.2 game pictures/s.

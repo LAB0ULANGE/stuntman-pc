@@ -167,7 +167,8 @@ def _build(sources, work_dir: str, parallel: int) -> str:
         handle.write(harness_source(names))
     runtime = os.path.join(cppcheck.RUNTIME, "src")
     all_sources = [os.path.abspath(p) for p in sources] + [
-        harness, os.path.join(runtime, "eefpu.cpp"), os.path.join(runtime, "lifted_support.cpp"),
+        harness, os.path.join(runtime, "eefpu.cpp"), os.path.join(runtime, "ps2fpu.cpp"),
+        os.path.join(runtime, "lifted_support.cpp"),
         os.path.join(runtime, "vu0.cpp")]
     cppcheck._BUILDS += 1
     dll = os.path.join(work_dir, "lifted_%d_%d.dll" % (os.getpid(), cppcheck._BUILDS))

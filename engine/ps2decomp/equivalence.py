@@ -245,7 +245,7 @@ def _build(paths, work: str) -> str:
 
     runtime = os.path.join(cppcheck.RUNTIME, "src")
     all_sources = list(paths) + [os.path.join(runtime, name) for name in
-                                 ("eefpu.cpp", "eeint.cpp", "lifted_support.cpp", "vu0.cpp")]
+                                 ("eefpu.cpp", "ps2fpu.cpp", "eeint.cpp", "lifted_support.cpp", "vu0.cpp")]
     cppcheck._BUILDS += 1
     dll = os.path.join(work, "equivalence_%d_%d.dll" % (os.getpid(), cppcheck._BUILDS))
     # The sources go in a response file: a hundred and more paths are longer than

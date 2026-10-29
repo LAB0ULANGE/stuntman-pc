@@ -59,6 +59,8 @@ void Divide(u64& hi, u64& lo, u64 a, u64 b, bool is_signed) {
 }
 
 u32 FloatMulAdd(u32 acc, u32 a, u32 b, bool subtract) {
+    if (generated::Ps2FloatModel())
+        return generated::Ps2FloatAdd(acc, generated::Ps2FloatMul(a, b) ^ (subtract ? 0x80000000u : 0u));
     // Operands as the FPU reads them (a denormal is zero), the result as every
     // FPU result is narrowed (eefpu.cpp).
     const auto operand = [](u32 bits) { return double(generated::FloatValue(generated::FloatMove(bits))); };
@@ -285,6 +287,8 @@ void FunnelShift(u64& lo, u64& hi, u64 alo, u64 ahi, u64 blo, u64 bhi, u32 sa) {
 }
 
 u32 FloatRsqrt(u32 fs, u32 ft) {
+    if (generated::Ps2FloatModel())
+        return generated::Ps2FloatDiv(fs, generated::Ps2FloatSqrt(ft));
     const double root = std::sqrt(std::fabs((double)generated::FloatValue(ft)));
     if (root == 0.0) return (fs & 0x80000000u) | 0x7F7FFFFFu;
     double value = (double)generated::FloatValue(fs) / root;

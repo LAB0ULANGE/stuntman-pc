@@ -27,7 +27,9 @@
  */
 
 #include "ps2rt/generated.h"
+#include "ps2rt/ps2fpu.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
@@ -50,7 +52,42 @@ float FromBits(u32 bits) {
 
 u32 ToBits(double value) { return FloatNarrow(value); }
 
+/*
+ * float_model=ps2 (SetFloatModel): the FPU's arithmetic bit for bit, as the
+ * hardware's datapaths compute it - not the exact result rounded toward zero
+ * (ps2fpu.cpp, from the description in docs/PS2FPU.md: a one-guard-bit adder,
+ * a Booth multiplier whose low partial-product bits are dropped, SRT divider
+ * and square root with no correction step). Stuntman's chase cars replay
+ * recorded controller inputs through the game's physics and drift off the
+ * road without it. Every exponent is a number here (255 too: no infinity, no
+ * NaN); the largest magnitude is 0x7FFFFFFF; zero and denormals read as zero.
+ */
+bool g_ps2_float = std::getenv("PS2RT_EE_FLOAT") && std::strcmp(std::getenv("PS2RT_EE_FLOAT"), "ps2") == 0;
+
+constexpr u32 kSign = 0x80000000u;
+
+u32 Ps2Add(u32 a, u32 b) { return ps2fpu::Add(a, b); }
+u32 Ps2Mul(u32 a, u32 b) { return ps2fpu::Mul(a, b); }
+u32 Ps2Div(u32 a, u32 b) { return ps2fpu::Div(a, b); }
+u32 Ps2Sqrt(u32 a) { return ps2fpu::Sqrt(a); }
+
+/* For comparisons: the value as the FPU orders it (exponent 255 is the largest). */
+float Ps2Value(u32 bits) {
+    if ((bits & 0x7F800000u) == 0) bits &= kSign;
+    else if ((bits & 0x7F800000u) == 0x7F800000u) bits = (bits & kSign) | 0x7F7FFFFFu;
+    float value;
+    std::memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
 }  // namespace
+
+void SetFloatModel(bool ps2) { g_ps2_float = ps2; }
+bool Ps2FloatModel() { return g_ps2_float; }
+u32 Ps2FloatAdd(u32 a, u32 b) { return Ps2Add(a, b); }
+u32 Ps2FloatMul(u32 a, u32 b) { return Ps2Mul(a, b); }
+u32 Ps2FloatDiv(u32 a, u32 b) { return Ps2Div(a, b); }
+u32 Ps2FloatSqrt(u32 a) { return Ps2Sqrt(a); }
 
 u32 FloatNarrow(double value) {
     if (value != value) {
@@ -71,19 +108,31 @@ u32 FloatNarrow(double value) {
     return bits;
 }
 
-u32 FloatAdd(u32 a, u32 b) { return ToBits(double(FromBits(a)) + double(FromBits(b))); }
-u32 FloatSub(u32 a, u32 b) { return ToBits(double(FromBits(a)) - double(FromBits(b))); }
-u32 FloatMul(u32 a, u32 b) { return ToBits(double(FromBits(a)) * double(FromBits(b))); }
+u32 FloatAdd(u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Add(a, b);
+    return ToBits(double(FromBits(a)) + double(FromBits(b)));
+}
+u32 FloatSub(u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Add(a, b ^ kSign);
+    return ToBits(double(FromBits(a)) - double(FromBits(b)));
+}
+u32 FloatMul(u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Mul(a, b);
+    return ToBits(double(FromBits(a)) * double(FromBits(b)));
+}
 
 u32 FloatMulAdd(u32 acc, u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Add(acc, Ps2Mul(a, b));
     return ToBits(double(FromBits(acc)) + double(FromBits(a)) * double(FromBits(b)));
 }
 
 u32 FloatMulSub(u32 acc, u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Add(acc, Ps2Mul(a, b) ^ kSign);
     return ToBits(double(FromBits(acc)) - double(FromBits(a)) * double(FromBits(b)));
 }
 
 u32 FloatDiv(u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Div(a, b);
     const double divisor = FromBits(b);
     if (divisor == 0.0) {
         return ToBits(0.0);
@@ -94,27 +143,30 @@ u32 FloatDiv(u32 a, u32 b) {
 /* Written to match how the interpreter picks between equal or unordered operands:
    the first operand wins unless the second is strictly smaller (larger). */
 u32 FloatMin(u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Value(b) < Ps2Value(a) ? b : a;
     const double x = FromBits(a), y = FromBits(b);
     return ToBits(y < x ? y : x);
 }
 
 u32 FloatMax(u32 a, u32 b) {
+    if (g_ps2_float) return Ps2Value(b) > Ps2Value(a) ? b : a;
     const double x = FromBits(a), y = FromBits(b);
     return ToBits(y > x ? y : x);
 }
 
-u32 FloatNeg(u32 a) { return ToBits(-double(FromBits(a))); }
-u32 FloatAbs(u32 a) { return ToBits(std::fabs(double(FromBits(a)))); }
+u32 FloatNeg(u32 a) { return g_ps2_float ? a ^ kSign : ToBits(-double(FromBits(a))); }
+u32 FloatAbs(u32 a) { return g_ps2_float ? a & ~kSign : ToBits(std::fabs(double(FromBits(a)))); }
 
 /* The square root of a negative number - and of -0.0 - is zero here. */
 u32 FloatSqrt(u32 a) {
+    if (g_ps2_float) return Ps2Sqrt(a);
     const double x = FromBits(a);
     return ToBits(x > 0.0 ? std::sqrt(x) : 0.0);
 }
 
 /* `mov.s` as the interpreter runs it: the value passes through the FPU, so a NaN
    pattern comes out as zero rather than being copied bit for bit. */
-u32 FloatMove(u32 a) { return ToBits(FromBits(a)); }
+u32 FloatMove(u32 a) { return g_ps2_float ? a : ToBits(FromBits(a)); }
 
 u32 FloatFromInt(u32 bits_as_int) {
     return ToBits(static_cast<double>(static_cast<s32>(bits_as_int)));
@@ -129,7 +181,7 @@ u32 IntFromFloat(u32 float_bits) {
     return (float_bits & 0x80000000u) ? 0x80000000u : 0x7FFFFFFFu;
 }
 
-float FloatValue(u32 bits) { return FromBits(bits); }
+float FloatValue(u32 bits) { return g_ps2_float ? Ps2Value(bits) : FromBits(bits); }
 
 u32 FloatBits(float value) {
     u32 bits;
