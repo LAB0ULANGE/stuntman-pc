@@ -33,20 +33,38 @@ void RegisterGameOverrides();
 
 namespace {
 
-/* The port is built for AVX2 (engine/host/CMakeLists.txt; the VU's lanes and
-   the rest take its three-operand forms): a processor without it is told so
+/* The instruction set the port is built for (PS2_ARCH, engine/host/
+   CMakeLists.txt: AVX2, AVX, or SSE2 - with SSE4.1, which the VU's lanes
+   take without /arch, ps2rt/vu_math.h): a processor without it is told so
    rather than stopped by an illegal instruction somewhere. */
-bool HasAvx2() {
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86)) && defined(__AVX2__)
+#if defined(__AVX2__)
+const char* const kNeeds = "AVX2 (Intel Haswell, AMD Excavator or later)";
+#elif defined(__AVX__)
+const char* const kNeeds = "AVX (Intel Sandy Bridge, AMD Bulldozer or later)";
+#else
+const char* const kNeeds = "SSE4.1 (Intel Core 2 of 2008, AMD Bulldozer or later)";
+#endif
+
+bool HasInstructionSet() {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
     int info[4];
     __cpuid(info, 0);
-    if (info[0] < 7) return false;
+    const int top = info[0];
     __cpuid(info, 1);
+    if (!((info[2] >> 19) & 1)) return false;       // SSE4.1
+#if defined(__AVX__)
     const bool osxsave = (info[2] >> 27) & 1, avx = (info[2] >> 28) & 1;
     if (!osxsave || !avx) return false;
     if ((_xgetbv(0) & 6) != 6) return false;        // the OS saves the YMM registers
+#endif
+#if defined(__AVX2__)
+    if (top < 7) return false;
     __cpuidex(info, 7, 0);
     return (info[1] >> 5) & 1;
+#else
+    (void)top;
+    return true;
+#endif
 #else
     return true;
 #endif
@@ -157,8 +175,8 @@ int main(int argc, char** argv) {
         argc = int(play.size());
         argv = play_argv.data();
     }
-    if (!HasAvx2()) {
-        std::fprintf(stderr, "This build needs a processor with AVX2 (Intel Haswell, AMD Excavator or later).\n");
+    if (!HasInstructionSet()) {
+        std::fprintf(stderr, "This build needs a processor with %s.\n", kNeeds);
         return 70;
     }
 #ifdef PS2HOST_GAME_TITLE

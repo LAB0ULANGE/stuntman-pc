@@ -98,9 +98,18 @@ endif()
 
 if(MSVC)
     # Translated code throws lifted::Abort; its chunks are large.
-    # AVX2: three-operand SIMD for the VU's lanes and the rest (6% of a race;
-    # main.cpp says so on a processor without it).
-    target_compile_options(ps2rt PUBLIC /EHsc /bigobj /W3 /wd4100 /wd4189 /arch:AVX2)
+    # PS2_ARCH: the instruction set the whole port is built for. SSE2 (with
+    # the SSE4.1 the VU's lanes take: any processor since 2008) runs
+    # everywhere; AVX2's three-operand forms gain 4% (Stuntman, the scripted
+    # run to the first stunt: 100 s against 104), not worth leaving out the
+    # processors without it. main.cpp tells a processor without what the
+    # build needs so.
+    set(PS2_ARCH "SSE2" CACHE STRING "Instruction set: AVX2, AVX or SSE2 (with SSE4.1)")
+    set_property(CACHE PS2_ARCH PROPERTY STRINGS AVX2 AVX SSE2)
+    target_compile_options(ps2rt PUBLIC /EHsc /bigobj /W3 /wd4100 /wd4189)
+    if(PS2_ARCH STREQUAL "AVX2" OR PS2_ARCH STREQUAL "AVX")
+        target_compile_options(ps2rt PUBLIC /arch:${PS2_ARCH})
+    endif()
     target_compile_definitions(ps2rt PUBLIC _CRT_SECURE_NO_WARNINGS)
     target_compile_options(ps2host PRIVATE /Z7)     # symbols for --sample, as the ports'
     target_compile_options(ps2rt PRIVATE /Z7)

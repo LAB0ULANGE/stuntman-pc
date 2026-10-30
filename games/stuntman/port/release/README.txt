@@ -21,7 +21,7 @@ What you need
 -------------
 
 * Windows 10 or 11, 64-bit
-* A processor with AVX2
+* A 64-bit processor (any with SSE4.1: from 2008 on)
 * A graphics card with a Vulkan 1.3 driver
 * Your own disc image of Stuntman (SLES_502.88)
 

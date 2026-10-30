@@ -3,7 +3,7 @@
 An unofficial, fan-made **native Windows port of Stuntman** (PlayStation 2,
 2002). The game's PS2 program was translated to C++ and compiled for the PC:
 it runs directly on your computer, not in an emulator - with higher
-resolutions, widescreen, smoothing and your controller.
+resolutions, widescreen and ultrawide, smoothing and your controller.
 
 > **No game content here.** This repository and its downloads contain none of
 > the game's textures, sounds, music, movies or data. You need **your own
@@ -30,7 +30,7 @@ The game runs at 25 pictures a second, as on the console. To hold that:
 |               | Minimum (`resolution=original`)                         | Recommended (`resolution=3x`)                  |
 |---------------|---------------------------------------------------------|------------------------------------------------|
 | System        | Windows 10/11, 64-bit                                   | Windows 10/11, 64-bit                          |
-| Processor     | 4 cores with AVX2, fast per core: Intel Core i5-12400, AMD Ryzen 5 5600 or better | Intel Core i7-10700K, AMD Ryzen 5 5600X or better |
+| Processor     | 4 cores, fast per core: Intel Core i5-12400, AMD Ryzen 5 5600 or better | Intel Core i7-10700K, AMD Ryzen 5 5600X or better |
 | Graphics card | Vulkan 1.3: NVIDIA RTX 3060 / AMD RX 6600 (estimate)    | NVIDIA RTX 3070 / AMD RX 6700 XT               |
 | Memory        | 8 GB                                                    | 8 GB                                           |
 
