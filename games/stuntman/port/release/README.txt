@@ -62,8 +62,10 @@ reads it when it starts):
                       2x, 3x... (higher is sharper, and heavier for the
                       graphics card)
   fullscreen=on       start in fullscreen (Alt+Enter switches too)
-  widescreen=on       16:9: a wider view of the scene (with aspect=16:9);
-  aspect=16:9         take both lines out for the original 4:3
+  widescreen=on       a wider view of the scene, at the shape of aspect=
+  aspect=16:9         16:9, 21:9 or 32:9 (ultrawide), or auto (the
+                      window's or the screen's own shape); take both
+                      lines out for the original 4:3
   antialiasing=fxaa   smoother edges (off to take it out)
   sharpen=25          0 (none) to 100 (sharpest)
   shadows=off         no shadows (everything lit, as before they were fixed)

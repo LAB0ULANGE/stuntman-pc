@@ -266,15 +266,17 @@ void PictureWait(lifted::Context& c) {
     F_001D4FA8(c);
 }
 
-// widescreen=on: the scene seen 16:9. The camera (0x001D4C88, every
+// widescreen=on: the scene seen at the picture's shape (aspect=: 16:9,
+// 21:9, 32:9, the window's own with auto). The camera (0x001D4C88, every
 // picture) passes its horizontal field of view in $f12 (60 degrees in the
 // stunts) and its aspect in $f13 (4/3) to the projection (0x001D6440: x
 // scale 256/tan(fov/2), y scale that times the aspect, what VU1 draws with)
 // and to the view's clipping planes (0x001D6008); nothing else calls them.
-// Both given tan(fov/2) and the aspect times 4/3 (16/9 over 4/3): the
-// picture as tall as before and a third wider, the planes as wide. The
-// display's aspect=16:9 shows it at its shape; the 2D (the gauges, the
-// menus) is stretched with it.
+// Both given tan(fov/2) and the aspect times the picture's over 4/3 (16/9:
+// a third wider): the picture as tall as before (Hor+), the planes as wide.
+// The display shows it at that shape; the 2D (the gauges, the menus) is
+// stretched with it. The shape is asked every picture, so a window resized
+// or made fullscreen with aspect=auto is followed.
 bool Widescreen() {
     static const bool on = ps2host::SettingOn("widescreen", false);   // first asked by the camera, the settings read
     return on;
@@ -285,7 +287,7 @@ void Widen(lifted::Context& c) {
     float fov, aspect;
     std::memcpy(&fov, &c.f[12], 4);
     std::memcpy(&aspect, &c.f[13], 4);
-    const float wider = (16.0f / 9.0f) / aspect;
+    const float wider = ps2host::PictureAspect() / aspect;
     if (!(wider > 1.0f)) return;                // already that wide
     fov = 2.0f * std::atan(std::tan(fov * 0.5f) * wider);
     aspect *= wider;
@@ -308,7 +310,7 @@ void WideClipping(lifted::Context& c) {
 void RegisterGameOverrides() {
     ps2host::Override(0x001D4FA8u, PictureWait, "the picture's wait: a picture every blank with frame_rate=50");
     ps2host::Override(0x001D0DA0u, LightTable, "the light table: shadows and ambient light from the PC settings");
-    ps2host::Override(0x001D6440u, WideProjection, "the projection: the scene 16:9 with widescreen=on");
+    ps2host::Override(0x001D6440u, WideProjection, "the projection: the scene at the picture's shape with widescreen=on");
     ps2host::Override(0x001D6008u, WideClipping, "the view's clipping planes: as wide as the projection");
     // ps2host::Override(0x00123456u, SomeHook, "what it does and why");
 

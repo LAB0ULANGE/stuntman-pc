@@ -128,12 +128,15 @@ void PresentGdi() {
     ReleaseDC(g_window, dc);
 }
 
-/* The "aspect" setting as the display takes it: "4:3" (the default), "16:9",
-   or "auto" (0, the window's own shape). */
+/* The "aspect" setting as the display takes it: "4:3" (the default), any
+   width:height ("16:9", "21:9", "32:9"...), or "auto" (0, the window's own
+   shape). */
 float SettingAspect() {
     const std::string aspect = Setting("aspect", "4:3");
-    if (aspect == "16:9") return 16.0f / 9.0f;
     if (aspect == "auto") return 0.0f;
+    float w = 0.0f, h = 0.0f;
+    if (std::sscanf(aspect.c_str(), "%f:%f", &w, &h) == 2 && w > 0.0f && h > 0.0f && w / h >= 1.0f && w / h <= 8.0f)
+        return w / h;
     return 4.0f / 3.0f;
 }
 

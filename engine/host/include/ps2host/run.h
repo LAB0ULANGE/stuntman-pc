@@ -451,8 +451,8 @@ bool WindowFullscreen();
    delay. */
 void SetWindowVsync(bool on);
 bool WindowVsync();
-/* The picture's shape (the "aspect" setting: "4:3", "16:9" or "auto", the
-   window's own), shown so; and as width over height, for a game to draw it
+/* The picture's shape (the "aspect" setting: "4:3", "16:9", "21:9", any
+   width:height, or "auto", the window's own), shown so; and as width over height, for a game to draw it
    so - auto's the window's now. */
 void SetWindowAspect(const std::string& aspect);
 float PictureAspect();

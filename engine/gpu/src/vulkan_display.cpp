@@ -95,12 +95,11 @@ public:
     std::mutex title_lock_;
     std::string title_;
     bool title_changed_ = false;
-    float WindowAspect() const override {
-        int w = 0, h = 0;
-        if (!window_ || !SDL_GetWindowSizeInPixels(window_, &w, &h) || w <= 0 || h <= 0) return 0.0f;
-        return float(w) / float(h);
-    }
+    // As the last picture presented found it (asked every picture, from the
+    // game's thread: no call into SDL there).
+    float WindowAspect() const override { return window_aspect_.load(std::memory_order_relaxed); }
     std::atomic<float> aspect_{4.0f / 3.0f};
+    std::atomic<float> window_aspect_{0.0f};
     void SetPostFilter(bool fxaa, float sharpen) override {
         fxaa_ = fxaa;
         sharpen_ = std::clamp(sharpen, 0.0f, 1.0f);
@@ -875,10 +874,11 @@ bool VulkanDisplay::FinishPresent(std::uint32_t index, VkImage source, std::uint
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
         vkCmdClearColorImage(cmd_, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
     }
-    // 4:3 as a television shows it, 16:9, or the window's own shape (SetAspect),
+    // 4:3 as a television shows it, 16:9, 21:9..., or the window's own shape (SetAspect),
     // centred in the window.
     std::int32_t w = std::int32_t(extent_.width), h = std::int32_t(extent_.height);
     std::int32_t dw = w, dh = h;
+    if (w > 0 && h > 0) window_aspect_.store(float(w) / float(h), std::memory_order_relaxed);
     const float aspect = aspect_.load();
     if (aspect > 0.0f) {
         if (float(w) > float(h) * aspect) dw = std::int32_t(float(h) * aspect + 0.5f);
