@@ -262,7 +262,10 @@ constexpr u32 kBlanksPerPicture = 0x005C21B4u;
 
 void PictureWait(lifted::Context& c) {
     static const bool fifty = ps2host::Setting("frame_rate", "25") == "50";
-    if (fifty) ps2host::GuestMemory().Write(kBlanksPerPicture, 1, 4);
+    // frame_rate_from=N (tests): 50 only from blank N on, the run the same as
+    // at 25 until then (menus and loads take other blanks at 50).
+    static const u64 from = std::stoull(ps2host::Setting("frame_rate_from", "0"));
+    if (fifty && ps2host::EeFrame() >= from) ps2host::GuestMemory().Write(kBlanksPerPicture, 1, 4);
     F_001D4FA8(c);
 }
 
