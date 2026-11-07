@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#ifndef _WIN32
+#define _putenv_s(name, value) setenv(name, value, 1)
+#endif
 
 #include "ps2gpu/display.h"
 #include "ps2gpu/gs_renderer.h"
