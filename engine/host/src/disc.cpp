@@ -4,6 +4,11 @@
 #include <cstring>
 #include <string>
 
+#ifndef _WIN32
+#define _fseeki64 fseeko
+#define _ftelli64 ftello
+#endif
+
 namespace ps2host {
 
 namespace {

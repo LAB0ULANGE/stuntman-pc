@@ -13,10 +13,17 @@
  * playing it: how sound is checked without anyone listening.
  */
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <mmsystem.h>
+#elif defined(PS2HOST_VULKAN)
+// Elsewhere SDL3's audio stream, with the window's SDL: the same queue of
+// kBuffers buffers, counted in its bytes.
+#include <SDL3/SDL_audio.h>
+#include <SDL3/SDL_init.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -29,20 +36,36 @@
 #include "ps2host/run.h"
 #include <cmath>
 
+#ifdef _WIN32
 #pragma comment(lib, "winmm.lib")
+#endif
 
 namespace ps2host {
 
 namespace {
 
+#ifndef _WIN32
+using DWORD = unsigned;
+#endif
+
 constexpr int kBuffers = 12;
 constexpr DWORD kFrames = 1024;                 // 21 ms at 48 kHz
 
 struct Device {
+#ifdef _WIN32
     HWAVEOUT out = nullptr;
     WAVEHDR headers[kBuffers] = {};
     std::vector<short> data[kBuffers];
     int filling = 0;                            // the buffer being filled
+#else
+#ifdef PS2HOST_VULKAN
+    SDL_AudioStream* out = nullptr;
+#else
+    void* out = nullptr;                        // no device
+#endif
+    std::vector<short> data[1];                 // the buffer being filled; the stream has the queued
+    static constexpr int filling = 0;
+#endif
     DWORD filled = 0;                           // frames in it
     unsigned long long dropped = 0;
     bool mute = false;                          // PS2HOST_AUDIO_MUTE: silence played
@@ -59,10 +82,14 @@ struct Device {
     ~Device() { Close(); }
     void Close() {
         if (out) {
+#ifdef _WIN32
             waveOutReset(out);
             for (WAVEHDR& h : headers)
                 if (h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(out, &h, sizeof h);
             waveOutClose(out);
+#elif defined(PS2HOST_VULKAN)
+            SDL_DestroyAudioStream(out);        // and its device
+#endif
             out = nullptr;
         }
         if (!wav) return;
@@ -126,6 +153,22 @@ void AudioSteer::Stretch(const short* frames, unsigned count, double ratio, std:
 
 bool OpenAudio() {
     Device& d = D();
+#ifndef _WIN32
+#ifdef PS2HOST_VULKAN
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return false;
+    const SDL_AudioSpec spec = {SDL_AUDIO_S16LE, 2, 48000};
+    d.out = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (!d.out) return false;
+    d.mute = std::getenv("PS2HOST_AUDIO_MUTE") != nullptr;
+    SDL_ResumeAudioStreamDevice(d.out);
+    std::fprintf(stderr, "[audio] playing (SDL, %s)\n", SDL_GetCurrentAudioDriver());
+    d.data[0].assign(kFrames * 2, 0);
+    return true;
+#else
+    (void)d;
+    return false;
+#endif
+#else
     WAVEFORMATEX format = {};
     format.wFormatTag = WAVE_FORMAT_PCM;
     format.nChannels = 2;
@@ -160,6 +203,7 @@ bool OpenAudio() {
         d.headers[i].dwFlags = WHDR_DONE;           // free
     }
     return true;
+#endif
 }
 
 bool OpenWavDump(const std::string& path) {
@@ -191,10 +235,18 @@ AudioLog& Log() {
 }
 
 int Queued(Device& d) {
+#ifdef _WIN32
     int n = 0;
     for (const WAVEHDR& h : d.headers)
         if ((h.dwFlags & WHDR_PREPARED) && !(h.dwFlags & WHDR_DONE)) ++n;
     return n;
+#elif defined(PS2HOST_VULKAN)
+    const int bytes = d.out ? SDL_GetAudioStreamQueued(d.out) : 0;
+    return bytes > 0 ? bytes / int(kFrames * 4) : 0;
+#else
+    (void)d;
+    return 0;
+#endif
 }
 
 void NoteBatch(Device& d, unsigned count) {
@@ -251,8 +303,12 @@ void AudioFrames(const short* frames, unsigned count) {
     }
     if (!d.out) return;
     while (count) {
+#ifdef _WIN32
         WAVEHDR& h = d.headers[d.filling];
         if (!(h.dwFlags & WHDR_DONE)) {             // every buffer queued: drop
+#else
+        if (Queued(d) >= kBuffers) {                // every buffer queued: drop
+#endif
             d.dropped += count;
             return;
         }
@@ -264,11 +320,15 @@ void AudioFrames(const short* frames, unsigned count) {
         count -= take;
         if (d.filled == kFrames) {
             if (Log().on && Queued(d) == 0) ++Log().ran_out;       // the device had nothing to play
+#ifdef _WIN32
             if (h.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(d.out, &h, sizeof h);
             h.dwFlags = 0;
             waveOutPrepareHeader(d.out, &h, sizeof h);
             waveOutWrite(d.out, &h, sizeof h);
             d.filling = (d.filling + 1) % kBuffers;
+#elif defined(PS2HOST_VULKAN)
+            SDL_PutAudioStreamData(d.out, d.data[0].data(), int(kFrames * 4));
+#endif
             d.filled = 0;
         }
     }

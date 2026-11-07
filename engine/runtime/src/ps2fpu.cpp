@@ -27,6 +27,8 @@ inline int TopBit(uint64_t v) {
     unsigned long idx;
     _BitScanReverse64(&idx, v);
     return int(idx);
+#elif defined(__GNUC__)
+    return 63 - __builtin_clzll(v);
 #else
     int n = 0;
     while (v >>= 1) ++n;

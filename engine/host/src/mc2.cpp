@@ -3,6 +3,7 @@
  */
 
 #include "ps2host/mc2.h"
+#include "ps2host/platform.h"
 
 #include <algorithm>
 #include <chrono>

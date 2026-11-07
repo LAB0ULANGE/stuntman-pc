@@ -31,6 +31,8 @@
 
 #if defined(_MSC_VER)
 #include <intrin.h>
+#elif defined(__x86_64__)
+#include <immintrin.h>
 #endif
 
 #include "ps2host/gs.h"
@@ -99,7 +101,7 @@ struct Producing {
 u32 Header(u32 type, int path, u32 count) { return type << 28 | u32(path & 0xF) << 24 | (count & 0xFFFFFF); }
 
 void Pause() {
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__x86_64__)
     _mm_pause();
 #endif
 }

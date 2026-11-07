@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <functional>
@@ -431,6 +432,10 @@ void FrameDone(u64 frame);
 /* The interlaced field being shown, 0 or 1 (CSR.FIELD): the frame's parity,
    changing at each vertical blank. */
 u32 ShownField();
+/* The running executable's own path (host.cpp): the PC settings and the
+   memory card go beside it. */
+std::filesystem::path ExecutablePath();
+
 /* The window (window.cpp): opened with --window, presented each frame. */
 bool OpenWindow(const wchar_t* title, int width, int height);
 /* The game's name, for the window's title (instead of the host's own, "PS2

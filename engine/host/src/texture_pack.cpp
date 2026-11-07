@@ -382,7 +382,11 @@ std::shared_ptr<Image> LoadPng(const std::vector<u8>& file) {
 }
 
 std::shared_ptr<Image> Load(const std::filesystem::path& path) {
+#ifdef _WIN32
     std::FILE* f = _wfopen(path.wstring().c_str(), L"rb");
+#else
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+#endif
     if (!f) return nullptr;
     std::vector<u8> bytes;
     std::fseek(f, 0, SEEK_END);

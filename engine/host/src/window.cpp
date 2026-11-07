@@ -8,20 +8,25 @@
  * thread at each frame (FrameDone).
  */
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <functional>
 #include <vector>
 
 #include "ps2host/gs.h"
+#include "ps2host/platform.h"
 #include "ps2host/timeline.h"
 #include "ps2host/run.h"
 #include "ps2host/settings.h"
@@ -29,6 +34,9 @@
 
 #ifdef PS2HOST_VULKAN
 #include <SDL3/SDL_scancode.h>
+#ifndef _WIN32
+#include <SDL3/SDL_render.h>
+#endif
 
 #include "ps2gpu/display.h"
 #endif
@@ -37,7 +45,11 @@ namespace ps2host {
 
 namespace {
 
+#ifdef _WIN32
 HWND g_window = nullptr;
+#else
+void* g_window = nullptr;           // no window but SDL3's (no GDI)
+#endif
 bool g_closed = false;
 
 #ifdef PS2HOST_VULKAN
@@ -73,6 +85,7 @@ int Scancode(int key) {
 }
 #endif
 
+#ifdef _WIN32
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM w, LPARAM l) {
     switch (message) {
         case WM_CLOSE:
@@ -127,6 +140,10 @@ void PresentGdi() {
                   DIB_RGB_COLORS, SRCCOPY);
     ReleaseDC(g_window, dc);
 }
+#else
+bool OpenGdiWindow(const wchar_t*, int, int) { return false; }
+void PresentGdi() {}
+#endif
 
 /* The "aspect" setting as the display takes it: "4:3" (the default), any
    width:height ("16:9", "21:9", "32:9"...), or "auto" (0, the window's own
@@ -203,7 +220,11 @@ bool WindowFocused() {
 #ifdef PS2HOST_VULKAN
     if (g_display) return g_display->Focused();
 #endif
+#ifdef _WIN32
     return g_window && GetForegroundWindow() == g_window;
+#else
+    return false;
+#endif
 }
 
 bool WindowClosed() { return g_closed; }
@@ -212,7 +233,11 @@ bool HostKeyDown(int key) {
 #ifdef PS2HOST_VULKAN
     if (g_display) return g_display->KeyDown(Scancode(key));
 #endif
+#ifdef _WIN32
     return (GetAsyncKeyState(key) & 0x8000) != 0;
+#else
+    return false;
+#endif
 }
 
 void HostRumble(u8 large, u8 small) {
@@ -411,6 +436,41 @@ void SetWindowOverlay(const std::vector<std::string>& lines) {
     // yellow (the one chosen).
     const std::uint32_t screen = std::max(480u, g_display->PixelHeight());
     const int line = std::max(14, int(screen / 48));
+#ifndef _WIN32
+    // No GDI: SDL's own 8x8 font, scaled to the line, on a software renderer.
+    const int scale = std::max(1, (line - 4) / 8);
+    std::size_t longest = 0;
+    for (const std::string& text : lines) longest = std::max(longest, text.size());
+    const int width = std::min(1280, int(longest) * 8 * scale + line);
+    const int height = std::min(720, int(lines.size()) * line + line / 2);
+    std::vector<std::uint32_t> pixels;
+    SDL_Surface* surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_XRGB8888);
+    SDL_Renderer* renderer = surface ? SDL_CreateSoftwareRenderer(surface) : nullptr;
+    if (renderer) {
+        SDL_SetRenderDrawColor(renderer, 16, 20, 32, 255);
+        SDL_RenderClear(renderer);
+        SDL_SetRenderScale(renderer, float(scale), float(scale));
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            const bool chosen = !lines[i].empty() && lines[i][0] == '>';
+            if (chosen) SDL_SetRenderDrawColor(renderer, 255, 210, 60, 255);
+            else if (i == 0) SDL_SetRenderDrawColor(renderer, 120, 190, 255, 255);
+            else SDL_SetRenderDrawColor(renderer, 235, 235, 235, 255);
+            const float x = float(line / 2) / float(scale);
+            const float y = float(int(i) * line + (line - 8 * scale) / 2 + line / 4) / float(scale);
+            SDL_RenderDebugText(renderer, x, y, lines[i].c_str());
+        }
+        SDL_RenderPresent(renderer);
+        pixels.resize(std::size_t(width) * std::size_t(height));
+        for (int y = 0; y < height; ++y)
+            std::memcpy(&pixels[std::size_t(y) * std::size_t(width)],
+                        static_cast<const std::uint8_t*>(surface->pixels) + std::size_t(y) * std::size_t(surface->pitch),
+                        std::size_t(width) * 4);
+        for (std::uint32_t& p : pixels) p |= 0xFF000000u;
+        SDL_DestroyRenderer(renderer);
+    }
+    if (surface) SDL_DestroySurface(surface);
+    g_display->SetOverlay(std::move(pixels), std::uint32_t(width), std::uint32_t(height));
+#else
     HDC dc = CreateCompatibleDC(nullptr);
     HFONT font = CreateFontA(-(line - 4), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS,
                              CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, FIXED_PITCH | FF_MODERN, "Consolas");
@@ -455,6 +515,7 @@ void SetWindowOverlay(const std::vector<std::string>& lines) {
     DeleteObject(font);
     DeleteDC(dc);
     g_display->SetOverlay(std::move(pixels), std::uint32_t(width), std::uint32_t(height));
+#endif
 #else
     (void)lines;
 #endif
