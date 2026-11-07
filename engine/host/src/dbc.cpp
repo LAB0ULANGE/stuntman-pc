@@ -38,6 +38,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -122,14 +123,42 @@ u64 g_frame = 0;
 u16 g_held = 0;                     // PadButtonsHeld
 u16 (*g_pad_hook)() = nullptr;      // SetPadHook
 
+/* A press of the keyboard or the controller seen by the game: held for it
+   until it has made two new pictures (each reads the controller once), half
+   a second at most. At a few pictures a second (a Steam Deck) a tap of Start
+   between two of them never paused the game. Scripted presses go as they are,
+   and the triggers (held, never tapped). `buttons` active low. */
+u16 Latched(u16 buttons) {
+    static std::chrono::steady_clock::time_point since[16];
+    static u64 pictures[16];
+    static u16 latched = 0;
+    const u16 down = u16(~buttons);
+    const auto now = std::chrono::steady_clock::now();
+    const u64 shown = FreshPictures();
+    for (int i = 0; i < 16; ++i) {
+        const u16 bit = u16(1u << i);
+        if (down & bit) {
+            latched |= bit;
+            since[i] = now;
+            pictures[i] = shown;
+        } else if ((latched & bit) &&
+                   (shown >= pictures[i] + 2 || now - since[i] >= std::chrono::milliseconds(500))) {
+            latched &= u16(~bit);
+        }
+    }
+    return u16(buttons & ~latched);
+}
+
 void PadData(u8* data) {
     u16 buttons = 0xFFFF;                                   // active low: nothing pressed
-    for (const auto& [input, key] : kKeys)
-        if (Pressed(key)) buttons &= u16(~(1u << input));
-    for (const Press& p : Script())
-        if (g_frame >= p.from && g_frame <= p.to) buttons &= u16(~(1u << p.input));
     HostPadState pad;
     const bool controller = HostPad(&pad);
+    for (const auto& [input, key] : kKeys)
+        if (Pressed(key)) buttons &= u16(~(1u << input));
+    if (controller) buttons &= u16(~(pad.buttons & ~0x0300u));
+    buttons = Latched(buttons);
+    for (const Press& p : Script())
+        if (g_frame >= p.from && g_frame <= p.to) buttons &= u16(~(1u << p.input));
     // The triggers apart: each is the input it is set to, at its travel.
     static const int left = TriggerInput("left_trigger", 8), right = TriggerInput("right_trigger", 9);
     u16 triggers = 0;
@@ -138,7 +167,6 @@ void PadData(u8* data) {
         if (pad.buttons & (1u << 8)) triggers |= u16(1u << left), travel[left] = std::max(travel[left], pad.l2);
         if (pad.buttons & (1u << 9)) triggers |= u16(1u << right), travel[right] = std::max(travel[right], pad.r2);
     }
-    buttons &= u16(~(pad.buttons & ~0x0300u));
     if (g_pad_hook) buttons &= u16(~g_pad_hook());
     const u16 full = u16(~buttons);                         // held other than by a trigger
     buttons &= u16(~triggers);

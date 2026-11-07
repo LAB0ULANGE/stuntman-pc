@@ -349,6 +349,8 @@ void CountPresentedPicture(bool fresh) {
     if (fresh) g_fresh_pictures.fetch_add(1, std::memory_order_relaxed);
 }
 
+u64 FreshPictures() { return g_fresh_pictures.load(std::memory_order_relaxed); }
+
 bool PumpWindow() {
 #ifdef PS2HOST_VULKAN
     if (g_display) {

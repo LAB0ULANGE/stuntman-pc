@@ -474,6 +474,9 @@ struct PictureRate {
 };
 /* A picture presented (gpu_bridge.cpp): new, or the one shown before. */
 void CountPresentedPicture(bool fresh);
+/* The new pictures presented so far (the game's pictures, each one having
+   read the controller once). */
+u64 FreshPictures();
 /* show_fps=on in the PC settings: the rate over the picture, in the window's
    overlay while nothing else is in it (PumpWindow, once a blank). */
 
