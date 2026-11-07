@@ -6,7 +6,7 @@ PS2 program was translated to C++ and compiled for the PC; it runs on your
 computer directly, not in an emulator.
 
 This download contains NO game content. You need your own copy of the
-game: an ISO disc image you made from your own disc - the European PS2
+game: a disc image (.iso, or .chd as chdman makes them) you made from your own disc - the European PS2
 release, SLES-50288 (executable SLES_502.88).
 Nothing of the game - no textures, sounds, music, movies or data - is
 included, and none is downloaded: everything comes from your disc image.
@@ -14,7 +14,8 @@ included, and none is downloaded: everything comes from your disc image.
 Not affiliated with, endorsed by or sponsored by the game's publisher or
 developer. Its trademarks belong to their owners.
 
-This is an ALPHA: expect bugs.
+This is an ALPHA, and the Linux version is EXPERIMENTAL (new in 0.2.0,
+little tested yet): expect bugs, and please report them.
 
 
 What you need

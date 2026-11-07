@@ -24,6 +24,11 @@ resolutions, widescreen and ultrawide, smoothing and your controller.
 3. Play. Alt+Enter switches between a window and fullscreen. The settings are
    in `pc_settings.ini` beside the executable (see its README.txt).
 
+**Linux (experimental):** download `Stuntman-PC-<version>-linux-x64.tar.gz`,
+unpack it in your home folder and run `Stuntman-PC/stuntman` (glibc 2.38 or
+newer, Vulkan 1.3). New in 0.2.0 and little tested yet: reports welcome. The
+Windows version also runs through Proton.
+
 ### Requirements
 
 The game runs at 25 pictures a second, as on the console. To hold that:
