@@ -114,6 +114,23 @@ if(MSVC)
     target_compile_options(ps2host PRIVATE /Z7)     # symbols for --sample, as the ports'
     target_compile_options(ps2rt PRIVATE /Z7)
     target_link_libraries(ps2host PRIVATE dbghelp winmm)  # ...which resolves them; 1 ms sleeps
+else()
+    # GCC and Clang: the same instruction sets (SSE2 is SSE4.1 here, which
+    # MSVC takes without a flag), and the arithmetic MSVC gives - no fused
+    # multiply-adds, no aliasing or signed-overflow assumptions in the
+    # translated code.
+    set(PS2_ARCH "SSE2" CACHE STRING "Instruction set: AVX2, AVX or SSE2 (with SSE4.1)")
+    set_property(CACHE PS2_ARCH PROPERTY STRINGS AVX2 AVX SSE2)
+    if(PS2_ARCH STREQUAL "AVX2")
+        target_compile_options(ps2rt PUBLIC -mavx2)
+    elseif(PS2_ARCH STREQUAL "AVX")
+        target_compile_options(ps2rt PUBLIC -mavx)
+    else()
+        target_compile_options(ps2rt PUBLIC -msse4.1)
+    endif()
+    target_compile_options(ps2rt PUBLIC -ffp-contract=off -fno-strict-aliasing -fwrapv)
+    find_package(Threads REQUIRED)
+    target_link_libraries(ps2rt PUBLIC Threads::Threads)
 endif()
 
 # The host's own tests, which need no game.
@@ -152,6 +169,36 @@ function(ps2_add_port target)
     file(GLOB translated ${PORT_TRANSLATED}/*.cpp)
     # dispatch.cpp, and discovered.cpp: code found copied at run time, translated.
     file(GLOB generated ${PORT_GENERATED}/*.cpp)
+    if(NOT MSVC)
+        # GCC and Clang take the translated code as engine/tools/split_cpp.py
+        # rewrites it into the build: a flag the code jumps past
+        # ("{ const bool t = x;", no longer read there: MSVC takes the jump,
+        # they refuse it) declared, then set; and a file past 8 MB (the 95 MB
+        # of discovered.cpp ran them out of memory) in pieces of about 4 MB,
+        # split between its functions.
+        set(rewritten)
+        foreach(source IN LISTS generated translated)
+            file(SIZE ${source} size)
+            get_filename_component(stem ${source} NAME_WE)
+            set(count 1)
+            if(size GREATER 8000000)
+                math(EXPR count "${size} / 4000000 + 1")
+            endif()
+            math(EXPR last "${count} - 1")
+            set(outputs)
+            foreach(i RANGE ${last})
+                list(APPEND outputs ${CMAKE_CURRENT_BINARY_DIR}/split/${stem}_${i}.cpp)
+            endforeach()
+            add_custom_command(OUTPUT ${outputs}
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/split_cpp.py
+                        ${source} ${CMAKE_CURRENT_BINARY_DIR}/split ${count}
+                DEPENDS ${source} ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/split_cpp.py
+                COMMENT "split_cpp: ${stem}.cpp")
+            list(APPEND rewritten ${outputs})
+        endforeach()
+        set(generated ${rewritten})
+        set(translated)
+    endif()
     add_executable(${target}
         ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/src/main.cpp
         ${generated}
@@ -176,7 +223,9 @@ function(ps2_add_port target)
                                                      PS2HOST_GAME_TITLE="${game_title}"
                                                      PS2HOST_GAME_VERSION="${game_version}"
                                                      PS2HOST_GAME_EXECUTABLE="${game_executable}")
-        target_link_libraries(${target} PRIVATE comdlg32)
+        if(WIN32)
+            target_link_libraries(${target} PRIVATE comdlg32)
+        endif()
         set(icon ${game_dir}/build/port/icon.ico)
         if(NOT EXISTS ${icon})
             set(icon ${game_dir}/port/icon.ico)
@@ -229,5 +278,9 @@ END
         # The symbols' file named by its name alone in the executable, not the
         # path it was built at (a release carries no one's folders).
         target_link_options(${target} PRIVATE /DEBUG /OPT:REF /OPT:ICF "/PDBALTPATH:%_PDB%")
+    else()
+        # The C++ runtime linked in: the executable runs on any distribution
+        # with the C library it was built against, or a newer one.
+        target_link_options(${target} PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endfunction()

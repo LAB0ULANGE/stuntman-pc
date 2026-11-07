@@ -11,7 +11,16 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#ifdef _WIN32
 #include <io.h>
+#else
+#include <unistd.h>
+#define _dup dup
+#define _dup2 dup2
+#define _close close
+#define _fileno fileno
+#define _putenv_s(name, value) setenv(name, value, 1)
+#endif
 #include <iterator>
 #include <memory>
 #include <string>

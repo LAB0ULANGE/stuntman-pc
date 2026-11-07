@@ -2,7 +2,10 @@
 # dispatch table and drives this file. (From engine/templates/game.)
 
 cmake_minimum_required(VERSION 3.20)
-project(stuntman_port LANGUAGES CXX RC)     # RC: the icon and version
+project(stuntman_port LANGUAGES CXX)
+if(WIN32)
+    enable_language(RC)                     # the icon and version
+endif()
 
 set(PS2_GENERATED_DIR "" CACHE PATH "dispatch.cpp, from engine/tools/port.py")
 
@@ -15,6 +18,13 @@ if(MSVC)
     get_filename_component(repo_root ${CMAKE_CURRENT_LIST_DIR}/../../.. ABSOLUTE)
     file(TO_NATIVE_PATH "${repo_root}/" repo_root_native)
     add_compile_options("/d1trimfile:${repo_root_native}")
+else()
+    # GCC and Clang: the same (the build folder, with the libraries' sources,
+    # is in the repository); -O2 as MSVC's.
+    get_filename_component(repo_root ${CMAKE_CURRENT_LIST_DIR}/../../.. ABSOLUTE)
+    add_compile_options("-ffile-prefix-map=${repo_root}/=")
+    set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
+    set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 endif()
 
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../../engine/host ${CMAKE_BINARY_DIR}/ps2host)

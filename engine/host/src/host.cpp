@@ -1,8 +1,10 @@
 #include "ps2host/host.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -31,7 +33,23 @@
 #include "ps2host/timeline.h"
 #include "ps2rt/generated.h"
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 namespace ps2host {
+
+std::filesystem::path ExecutablePath() {
+#ifdef _WIN32
+    wchar_t exe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    return std::filesystem::path(exe);
+#else
+    char exe[4096] = {};
+    const ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    return std::filesystem::path(n > 0 ? std::string(exe, std::size_t(n)) : std::string());
+#endif
+}
 
 /* The renderer's own choices (PC settings, or the options that override
    them): a run's, and a replay's (GsReplay) - the GPU time a replay
@@ -660,9 +678,7 @@ int Run(const Options& options) {
         if (!options.memcard.empty()) {
             where = std::filesystem::absolute(options.memcard).parent_path();
         } else {
-            wchar_t exe[MAX_PATH] = {};
-            GetModuleFileNameW(nullptr, exe, MAX_PATH);
-            where = std::filesystem::path(exe).parent_path();
+            where = ExecutablePath().parent_path();
         }
         LoadSettings((where / "pc_settings.ini").string());
     }

@@ -25,6 +25,8 @@
 #include <intrin.h>
 #include <timeapi.h>
 #include <tlhelp32.h>
+#elif defined(__x86_64__)
+#include <x86intrin.h>
 #endif
 
 namespace ps2host {
@@ -38,7 +40,7 @@ using Clock = std::chrono::steady_clock;
 // made a tenth of the run - and turned into seconds against the steady clock
 // when reported.
 std::uint64_t Ticks() {
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__x86_64__)
     return __rdtsc();
 #else
     return std::uint64_t(Clock::now().time_since_epoch().count());

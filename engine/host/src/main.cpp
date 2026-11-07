@@ -6,15 +6,32 @@
 #include <cstdio>
 #include <fcntl.h>
 #include <filesystem>
+#ifdef _WIN32
 #include <io.h>
+#endif
 #include <sys/stat.h>
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <commdlg.h>
+#else
+#include <cstdlib>
+#include <strings.h>
+#include <unistd.h>
+#define _stricmp strcasecmp
+#ifdef PS2HOST_VULKAN
+// The disc's file dialog and the message boxes: SDL3's.
+#include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_init.h>
+#include <SDL3/SDL_messagebox.h>
+#include <SDL3/SDL_timer.h>
+#endif
+#endif
 
 #include "ps2host/disc.h"
 #include "ps2host/host.h"
@@ -65,10 +82,32 @@ bool HasInstructionSet() {
     (void)top;
     return true;
 #endif
+#elif defined(__GNUC__) && defined(__x86_64__)
+#if defined(__AVX2__)
+    return __builtin_cpu_supports("avx2");
+#elif defined(__AVX__)
+    return __builtin_cpu_supports("avx");
+#else
+    return __builtin_cpu_supports("sse4.1");
+#endif
 #else
     return true;
 #endif
 }
+
+#ifndef _WIN32
+/* A message to the player: a box where SDL can show one, the terminal too. */
+void Tell(const std::string& text, bool error) {
+    std::fprintf(stderr, "%s\n", text.c_str());
+#ifdef PS2HOST_VULKAN
+    SDL_ShowSimpleMessageBox(error ? SDL_MESSAGEBOX_ERROR : SDL_MESSAGEBOX_WARNING,
+                             ps2host::GameTitle().empty() ? "PS2 port" : ps2host::GameTitle().c_str(), text.c_str(),
+                             nullptr);
+#else
+    (void)error;
+#endif
+}
+#endif
 
 std::string g_log;     // the log a run started without arguments writes
 
@@ -87,6 +126,40 @@ bool IsGameDisc(const std::string& path) {
 
 /* The player's disc image, from a file dialog; "" if they cancel. */
 std::string PickDisc() {
+#ifndef _WIN32
+#ifdef PS2HOST_VULKAN
+    // SDL's dialog (the desktop's portal, or zenity) answers on its own
+    // thread or in the event pump: pumped until it does.
+    struct Answer {
+        bool done = false;
+        bool failed = false;
+        std::string file;
+    } answer;
+    if (!SDL_Init(SDL_INIT_VIDEO)) return {};
+    static const SDL_DialogFileFilter filters[] = {
+        {"Disc images (*.iso; *.cue; *.bin)", "iso;cue;bin;ISO;CUE;BIN"},
+        {"All files", "*"},
+    };
+    SDL_ShowOpenFileDialog(
+        [](void* data, const char* const* files, int) {
+            auto* a = static_cast<Answer*>(data);
+            if (!files) a->failed = true;
+            else if (files[0]) a->file = files[0];
+            a->done = true;
+        },
+        &answer, nullptr, filters, 2, nullptr, false);
+    while (!answer.done) {
+        SDL_PumpEvents();
+        SDL_Delay(10);
+    }
+    if (answer.failed)
+        Tell("No file dialog could be opened (" + std::string(SDL_GetError()) + ").\n\nSet your " PS2HOST_GAME_NAME
+             " disc image in pc_settings.ini, beside the game:\n\ndisc=/path/to/your/disc.iso", true);
+    return answer.file;
+#else
+    return {};
+#endif
+#else
     char file[MAX_PATH] = {};
     OPENFILENAMEA dialog = {};
     dialog.lStructSize = sizeof dialog;
@@ -96,6 +169,7 @@ std::string PickDisc() {
     dialog.lpstrTitle = "Choose your " PS2HOST_GAME_NAME " disc image";
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
     return GetOpenFileNameA(&dialog) ? std::string(file) : std::string();
+#endif
 }
 #endif
 
@@ -107,16 +181,22 @@ std::string PickDisc() {
    An empty list: the player gave none. */
 std::vector<std::string> PlayArguments(const char* self) {
 #ifdef PS2HOST_GAME_EXECUTABLE
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    const std::filesystem::path here = std::filesystem::path(exe).parent_path();
+    const std::filesystem::path exe = ps2host::ExecutablePath();
+    const std::filesystem::path here = exe.parent_path();
     ps2host::LoadSettings((here / "pc_settings.ini").string());     // where --memcard puts them
     std::string disc = ps2host::Setting("disc");
     while (!IsGameDisc(disc)) {
+#ifdef _WIN32
         if (!disc.empty() && GetFileAttributesA(disc.c_str()) != INVALID_FILE_ATTRIBUTES)
             MessageBoxA(nullptr, ("This is not an image of the " PS2HOST_GAME_NAME " disc "
                                   "(" PS2HOST_GAME_EXECUTABLE "):\n\n" + disc).c_str(),
                         PS2HOST_GAME_NAME, MB_OK | MB_ICONWARNING);
+#else
+        std::error_code missing;
+        if (!disc.empty() && std::filesystem::exists(disc, missing))
+            Tell("This is not an image of the " PS2HOST_GAME_NAME " disc (" PS2HOST_GAME_EXECUTABLE "):\n\n" + disc,
+                 false);
+#endif
         disc = PickDisc();
         if (disc.empty()) return {};
     }
@@ -126,6 +206,14 @@ std::vector<std::string> PlayArguments(const char* self) {
     // both: their lines in the order they were written.
     g_log = std::filesystem::path(exe).stem().string() + ".log";
     const std::string log = (here / g_log).string();
+#ifndef _WIN32
+    const int file = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (file >= 0) {
+        dup2(file, fileno(stdout));
+        dup2(file, fileno(stderr));
+        close(file);
+    }
+#else
     std::FILE* stream = nullptr;
     freopen_s(&stream, "NUL", "w", stdout);    // streams with descriptors, in a windowed program
     freopen_s(&stream, "NUL", "w", stderr);
@@ -135,6 +223,7 @@ std::vector<std::string> PlayArguments(const char* self) {
         _dup2(file, _fileno(stderr));
         _close(file);
     }
+#endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a run ended by force loses nothing
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     std::fprintf(stderr, "[port] disc %s\n", disc.c_str());
@@ -155,12 +244,14 @@ std::vector<std::string> PlayArguments(const char* self) {
    a terminal its output goes to that one; redirected (a file, a pipe: the
    tools' runs), where it was sent. */
 void AttachTerminal() {
+#ifdef _WIN32
     const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out != nullptr && out != INVALID_HANDLE_VALUE) return;
     if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
     std::FILE* stream = nullptr;
     freopen_s(&stream, "CONOUT$", "w", stdout);
     freopen_s(&stream, "CONOUT$", "w", stderr);
+#endif
 }
 
 int main(int argc, char** argv) {
@@ -192,8 +283,12 @@ int main(int argc, char** argv) {
         std::fflush(nullptr);
         const std::string text = "The game stopped because of an error. What happened is in " +
                                  g_log + ", beside the game.";
+#ifdef _WIN32
         MessageBoxA(nullptr, text.c_str(), ps2host::GameTitle().empty() ? "PS2 port" : ps2host::GameTitle().c_str(),
                     MB_OK | MB_ICONERROR);
+#else
+        Tell(text, true);
+#endif
     }
     // What must be finished is (the report written, the settings and the
     // memory card saved as they changed, the WAV's header here); the rest -
@@ -203,6 +298,10 @@ int main(int argc, char** argv) {
     // still about), leaving a window that never closed.
     ps2host::CloseAudio();
     std::fflush(nullptr);
+#ifdef _WIN32
     TerminateProcess(GetCurrentProcess(), UINT(code));
+#else
+    std::_Exit(code);
+#endif
     return code;
 }

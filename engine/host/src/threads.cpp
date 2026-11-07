@@ -26,11 +26,22 @@
  * rethrown by the scheduler, on the host's own stack.
  */
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <timeapi.h>
 #pragma comment(lib, "synchronization.lib")
+#else
+#include <climits>
+#include <linux/futex.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <time.h>
+#include <ucontext.h>
+#include <unistd.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -56,6 +67,74 @@
 namespace ps2host {
 
 namespace {
+
+#ifndef _WIN32
+/* Win32's fibers, as the scheduler uses them, on ucontext; its wait on an
+   address on a futex. */
+#define CALLBACK
+using LPVOID = void*;
+
+struct Fiber {
+    ucontext_t context;
+    void* stack = nullptr;          // null for a thread's own
+    std::size_t stack_size = 0;
+    void (*entry)(void*) = nullptr;
+    void* parameter = nullptr;
+};
+thread_local Fiber* t_fiber = nullptr;      // the one running
+
+void FiberStart() {
+    t_fiber->entry(t_fiber->parameter);
+    std::abort();                   // a fiber switches away, never returns
+}
+
+LPVOID ConvertThreadToFiber(void*) {
+    if (!t_fiber) t_fiber = new Fiber;
+    return t_fiber;
+}
+
+// Translated code's frames are larger from GCC than from MSVC: 16 MB each,
+// reserved (touched as used), a guard page below.
+LPVOID CreateFiber(std::size_t, void (*entry)(void*), void* parameter) {
+    auto* f = new Fiber;
+    f->stack_size = std::size_t(16) << 20;
+    f->stack = mmap(nullptr, f->stack_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_STACK,
+                    -1, 0);
+    if (f->stack == MAP_FAILED) std::abort();
+    mprotect(f->stack, 4096, PROT_NONE);
+    f->entry = entry;
+    f->parameter = parameter;
+    getcontext(&f->context);
+    f->context.uc_stack.ss_sp = f->stack;
+    f->context.uc_stack.ss_size = f->stack_size;
+    f->context.uc_link = nullptr;
+    makecontext(&f->context, FiberStart, 0);
+    return f;
+}
+
+void SwitchToFiber(LPVOID to) {
+    Fiber* from = t_fiber;
+    t_fiber = static_cast<Fiber*>(to);
+    swapcontext(&from->context, &t_fiber->context);
+}
+
+void DeleteFiber(LPVOID fiber) {
+    auto* f = static_cast<Fiber*>(fiber);
+    if (f->stack) munmap(f->stack, f->stack_size);
+    delete f;
+}
+
+void WaitOnAddress(void* address, const void* seen, std::size_t, unsigned ms) {
+    const timespec wait = {time_t(ms / 1000), long(ms % 1000) * 1000000L};
+    syscall(SYS_futex, address, FUTEX_WAIT_PRIVATE, *static_cast<const u32*>(seen), &wait, nullptr, 0);
+}
+
+void WakeByAddressAll(void* address) { syscall(SYS_futex, address, FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0); }
+
+// A thread's priority raised where the system lets it (it needs the right to;
+// without, as it was).
+void RaisePriority(int nice) { setpriority(PRIO_PROCESS, id_t(syscall(SYS_gettid)), nice); }
+#endif
 
 enum class State { Dormant, Ready, Running, Waiting, Sleeping };
 
@@ -481,6 +560,9 @@ std::atomic<u64> g_last_vblank_ns{0};       // LastVblankNs
    waitable timer (Windows 10 1803 on), not Sleep's millisecond steps that can
    overshoot by more; sleep_until where there is none. */
 void SleepUntil(std::chrono::steady_clock::time_point when) {
+#ifndef _WIN32
+    std::this_thread::sleep_until(when);        // clock_nanosleep: as precise
+#else
     thread_local HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                                        TIMER_ALL_ACCESS);
     const auto left = when - std::chrono::steady_clock::now();
@@ -493,6 +575,7 @@ void SleepUntil(std::chrono::steady_clock::time_point when) {
     due.QuadPart = -std::max<long long>(1, std::chrono::duration_cast<std::chrono::nanoseconds>(left).count() / 100);
     if (SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0)) WaitForSingleObject(timer, INFINITE);
     else std::this_thread::sleep_until(when);
+#endif
 }
 
 // The real-time blanks' period (VideoModeAsked): NTSC's 59.94 Hz, or PAL's
@@ -745,11 +828,16 @@ namespace {
 // GuestCallsNow's read, apart: no C++ objects, so it can be guarded.
 int ReadCalls(const u32* data, std::size_t size, u32* out, int max) {
     int n = 0;
+#ifdef _WIN32
     __try {
         for (std::size_t i = size; i > 0 && n < max; --i) out[n++] = data[i - 1];
     } __except (1) {
         n = 0;
     }
+#else
+    // (No sampler suspends the thread here: profile.cpp's is Windows'.)
+    for (std::size_t i = size; i > 0 && n < max; --i) out[n++] = data[i - 1];
+#endif
     return n;
 }
 }  // namespace
@@ -849,6 +937,7 @@ namespace {
 /* The run's real time (RunThreads, or StartRealTime): the blanks' timer,
    VIF1's worker. */
 void StartRealTimeThreads() {
+#ifdef _WIN32
     timeBeginPeriod(1);             // sleeps to the millisecond, not Windows' 15.6 ms
     // ...even with the window hidden behind others: Windows 11 drops a
     // process's timer resolution then (a 200 us sleep took 15 ms, a blank
@@ -858,6 +947,7 @@ void StartRealTimeThreads() {
     process.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
     process.StateMask = 0;
     SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &process, sizeof process);
+#endif
     FastThread();
     if (!TimerThread().joinable()) {
         TimerThread() = std::thread([] {
@@ -865,7 +955,11 @@ void StartRealTimeThreads() {
             // Asleep almost always, it must wake on time with every core busy
             // (a blank 13 ms late was a frame shown late): the highest priority.
             FastThread();
+#ifdef _WIN32
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+#else
+            RaisePriority(-15);
+#endif
             VblankTimer();
         });
         std::atexit(StopTimer);
@@ -1297,12 +1391,16 @@ void IopWhileEeWaits() {
 }
 
 void FastThread() {
+#ifndef _WIN32
+    RaisePriority(-5);
+#else
     THREAD_POWER_THROTTLING_STATE throttling{};
     throttling.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
     throttling.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
     throttling.StateMask = 0;               // never throttled
     SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &throttling, sizeof throttling);
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
 }
 
 }  // namespace ps2host
