@@ -12,7 +12,8 @@ Stuntman-PC-<version>-linux-x64.tar.gz:
 The zip holds one folder, Stuntman-PC: the executable, the player's README
 (port/release/README.txt, its {version} filled in from game.json), the
 starting settings (port/release/pc_settings.ini) and the libraries' licences
-(THIRD-PARTY-NOTICES.txt, from the build's own copies of them). No game
+(THIRD-PARTY-NOTICES.txt, from the build's own copies of them; zstd's,
+which libchdr's copy leaves out, from tools/notices). No game
 content: the player brings their own disc image.
 
 It refuses a build that must not be published:
@@ -50,6 +51,10 @@ LIBRARIES = [
     ("volk", "volk-src/LICENSE.md"),
     ("Vulkan-Headers", "vulkan_headers-src/LICENSE.md"),
     ("glslang", "glslang-src/LICENSE.txt"),
+    ("libchdr", "libchdr-src/LICENSE.txt"),
+    ("LZMA SDK (in libchdr)", "libchdr-src/deps/lzma-26.02/LICENSE"),
+    ("miniz (in libchdr)", ("libchdr-src/deps/miniz-3.1.2/miniz.c", 4, 24)),
+    ("Zstandard (in libchdr)", os.path.join(HERE, "notices", "zstd-LICENSE.txt")),
 ]
 
 
@@ -86,11 +91,17 @@ def notices() -> str:
     parts = ["Third-party software built into the Stuntman PC port\n"
              "=====================================================\n"]
     for name, path in LIBRARIES:
+        # a file (in the build's copy of the library, or beside this script),
+        # or (file, first line, last line): the licence a source file's header holds
+        path, lines = (path, None) if isinstance(path, str) else (path[0], path[1:])
         full = os.path.join(DEPS, path)
         if not os.path.exists(full):
             sys.exit("package: %s's licence is missing (%s): build first" % (name, full))
         with open(full, encoding="utf-8", errors="replace") as f:
-            parts.append("\n\n%s\n%s\n\n%s" % (name, "-" * len(name), f.read().strip()))
+            text = f.read()
+        if lines:
+            text = "\n".join(line.strip(" *") for line in text.splitlines()[lines[0] - 1:lines[1]])
+        parts.append("\n\n%s\n%s\n\n%s" % (name, "-" * len(name), text.strip()))
     return "\n".join(parts) + "\n"
 
 

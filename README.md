@@ -7,8 +7,8 @@ resolutions, widescreen and ultrawide, smoothing and your controller.
 
 > **No game content here.** This repository and its downloads contain none of
 > the game's textures, sounds, music, movies or data. You need **your own
-> disc** of Stuntman: the port reads everything from an ISO image you made
-> from it. Not affiliated with, endorsed by or sponsored by the game's
+> disc** of Stuntman: the port reads everything from an image you made of
+> it (ISO, or CHD as chdman makes them). Not affiliated with, endorsed by or sponsored by the game's
 > publisher or developer; Stuntman is a trademark of its owner.
 
 **Status: alpha.** Playable (the career and its stunts), with bugs left.
@@ -18,8 +18,9 @@ resolutions, widescreen and ultrawide, smoothing and your controller.
 1. Download `Stuntman-PC-<version>-windows-x64.zip` from the
    [Releases](../../releases) and unzip it somewhere you can write to (not
    Program Files).
-2. Run `stuntman.exe`. The first time, it asks for your disc image and checks
-   that it is the right disc: the **European release, SLES-50288**.
+2. Run `stuntman.exe`. The first time, it asks for your disc image (`.iso` or
+   `.chd`) and checks that it is the right disc: the **European release,
+   SLES-50288**.
 3. Play. Alt+Enter switches between a window and fullscreen. The settings are
    in `pc_settings.ini` beside the executable (see its README.txt).
 
@@ -68,5 +69,5 @@ The port's own code is under the MIT licence (`LICENSE`; the engine's in
 
 **En français :** portage PC non officiel de Stuntman (PS2). Aucun contenu du
 jeu n'est fourni : il faut votre propre disque (version européenne
-SLES-50288) en image ISO. Téléchargez le zip dans les Releases, décompressez,
+SLES-50288) en image ISO ou CHD. Téléchargez le zip dans les Releases, décompressez,
 lancez `stuntman.exe` et choisissez votre image disque au premier lancement.

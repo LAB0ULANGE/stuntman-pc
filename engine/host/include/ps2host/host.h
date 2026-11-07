@@ -78,7 +78,7 @@ void RegisterRpcServer(u32 sid, RpcServer server);
 
 struct Options {
     std::string elf_path;          /* the game's executable, from the user's own disc */
-    std::string disc_path;         /* the user's image of the game disc (.iso) */
+    std::string disc_path;         /* the user's image of the game disc (.iso, .chd) */
     /* Loop iterations a run may take in all; unlimited by default, since a game
        runs indefinitely - the timeout is what stops a run that is stuck. */
     s64 loop_budget = INT64_MAX;

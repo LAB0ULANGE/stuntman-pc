@@ -6,8 +6,9 @@ PS2 program was translated to C++ and compiled for the PC; it runs on your
 computer directly, not in an emulator.
 
 This download contains NO game content. You need your own copy of the
-game: an ISO disc image you made from your own disc - the European PS2
-release, SLES-50288 (executable SLES_502.88).
+game: a disc image you made from your own disc - an ISO, or a CHD (as
+chdman makes them) - of the European PS2 release, SLES-50288 (executable
+SLES_502.88).
 Nothing of the game - no textures, sounds, music, movies or data - is
 included, and none is downloaded: everything comes from your disc image.
 
@@ -23,7 +24,7 @@ What you need
 * Windows 10 or 11, 64-bit
 * A 64-bit processor (any with SSE4.1: from 2008 on)
 * A graphics card with a Vulkan 1.3 driver
-* Your own disc image of Stuntman (SLES_502.88)
+* Your own disc image of Stuntman (SLES_502.88): .iso or .chd
 
 The game runs at 25 pictures a second, as on the console. To hold that:
 
@@ -46,8 +47,8 @@ Getting started
 
 1. Unzip this folder somewhere you can write to (not Program Files): the
    game keeps its saves and settings beside the executable.
-2. Run the executable. The first time, it asks for your disc image and
-   checks that it is the right disc.
+2. Run the executable. The first time, it asks for your disc image (.iso
+   or .chd) and checks that it is the right disc.
 
 Alt+Enter switches between a window and fullscreen.
 

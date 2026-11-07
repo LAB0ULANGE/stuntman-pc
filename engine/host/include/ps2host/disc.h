@@ -5,13 +5,16 @@
  *
  * An image is an .iso (2048-byte sectors, a DVD's usual form) or a raw CD image
  * (.bin of 2352-byte sectors: sync, header, Mode 1 data at 16 or Mode 2 data at
- * 24), opened directly or through the .cue sheet naming it.
+ * 24), opened directly or through the .cue sheet naming it - or either kept in
+ * a MAME .chd (CHD v5, libchdr: chdman's createdvd, 2048-byte sectors, or
+ * createcd, 2448-byte frames of a raw sector and its subcode).
  */
 
 #ifndef PS2HOST_DISC_H
 #define PS2HOST_DISC_H
 
 #include <cstdio>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -33,14 +36,16 @@ public:
 
     ~Disc();
 
-    /* Open an image file: an .iso, a raw .bin, or a .cue naming one. */
+    /* Open an image file: an .iso, a raw .bin, a .cue naming one, or a .chd. */
     bool Open(const std::string& path);
     /* Use an image held in memory instead (the host's own tests): 2048-byte
        sectors, or raw 2352-byte ones when it starts with a sector's sync. */
     void Use(std::vector<u8> image);
-    bool IsOpen() const { return file_ != nullptr || !memory_.empty(); }
-    /* A CD rather than a DVD: a raw image, or an .iso small enough for a CD. */
+    bool IsOpen() const { return file_ != nullptr || chd_ != nullptr || !memory_.empty(); }
+    /* A CD rather than a DVD: a raw image, a CD's .chd, or an .iso small enough for a CD. */
     bool IsCd() const;
+    /* The sectors the image holds. */
+    u32 Sectors() const { return sectors_; }
 
     /* Read `count` sectors' 2048 data bytes from `lsn`; false past the end. */
     bool Read(u32 lsn, u32 count, u8* out);
@@ -60,13 +65,22 @@ public:
     std::string BootPath();
 
 private:
+    struct Chd;
+    void Close();
+    bool OpenChd(const std::string& path);
     void DetectFormat();
+    bool DetectRaw(u32 stride);
     bool ReadBytes(u64 offset, u64 length, u8* out);
 
     std::FILE* file_ = nullptr;
+    Chd* chd_ = nullptr;        // a .chd, open
     std::vector<u8> memory_;
+    std::mutex mutex_;          // the image's reads: the file's position, the .chd's hunks
     u64 size_ = 0;
-    u32 data_offset_ = 0;       // within a raw sector: 16 (Mode 1), 24 (Mode 2); 0 for an .iso
+    u32 stride_ = kSectorSize;  // a sector's bytes in the image: 2048, 2352 (raw), 2448 (a CD .chd's frame)
+    u32 data_offset_ = 0;       // its 2048 data bytes within: 16 (Mode 1), 24 (Mode 2); 0 for an .iso
+    bool raw_ = false;          // the sectors have their header (sync, address, mode)
+    bool cd_ = false;           // a CD's .chd
     u32 sectors_ = 0;
 };
 
