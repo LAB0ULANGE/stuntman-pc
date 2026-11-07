@@ -1395,7 +1395,11 @@ u64 CachedTexture(Bridge& b, const gs::Context& c, u64 texa, u32 tw, u32 th, con
     const u64 renderer_key = t.shown_key ? t.shown_key : t.renderer_key;
     // Keep the cache bounded: the least recently used go (4,096: a race keeps
     // over 2,048 about, and each one evicted came back decoded again).
-    while (b.textures.size() > 4096) {
+    // (PS2HOST_TEXTURE_CACHE_MAX: fewer, to test the evictions a long session makes)
+    static const std::size_t most = std::getenv("PS2HOST_TEXTURE_CACHE_MAX")
+                                        ? std::max<std::size_t>(16, std::strtoul(std::getenv("PS2HOST_TEXTURE_CACHE_MAX"), nullptr, 10))
+                                        : 4096;
+    while (b.textures.size() > most) {
         const u64 old = b.texture_lru.back();
         b.texture_lru.pop_back();
         auto found = b.textures.find(old);
@@ -1985,7 +1989,7 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
             const u32 shown_lines = gs.ShownLines();
             const bool weave = gs.weave && gs.FieldMode() && shown_lines <= 512;
             const u32 dby = weave ? gs.DisplayedDby() : 0, parity = u32(frame + 1) & 1;
-            const u32 lines = std::min(shown_lines, 448u);
+            const u32 lines = std::min(shown_lines, 512u);    // PAL: 512 (the movies), NTSC 448
             static u64 shown_serial = 0;
             const bool fresh = found->second.drawn_serial != shown_serial;
             shown_serial = found->second.drawn_serial;
@@ -2086,7 +2090,7 @@ void PresentGpuPicture(ps2gpu::Display& display, u64 due_ns, u64 frame) {
             // The target's own pixels, as many as the picture's 640x448 at the
             // internal resolution.
             const u32 k = g_bridge->renderer->Scale();
-            const u32 lines = std::min(gs::TheGs().ShownLines(), 448u);    // 224 in field mode
+            const u32 lines = std::min(gs::TheGs().ShownLines(), 512u);    // PAL 512, NTSC 448; half in field mode
             // A new picture when the GPU drew into the one shown since it was
             // last presented (show_fps).
             static u64 shown_serial = 0;
