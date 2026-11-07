@@ -1,8 +1,11 @@
 #include "ps2host/disc.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <string>
+
+#include <libchdr/chd.h>
 
 namespace ps2host {
 
@@ -25,8 +28,52 @@ std::string Bare(std::string name) {
 
 }  // namespace
 
-Disc::~Disc() {
+// A .chd's hunks (libchdr), the last few read kept decompressed: the game
+// streams its files in runs of sectors, a hunk holding several of them.
+struct Disc::Chd {
+    chd_file* file = nullptr;
+    u32 hunk_bytes = 0;
+    u64 base = 0;               // where the first sector starts: after a track's stored pregap
+    struct Slot {
+        u32 number = ~0u;
+        u64 used = 0;
+        std::vector<u8> bytes;
+    } cache[4];
+    u64 clock = 0;
+
+    ~Chd() { if (file) chd_close(file); }
+    const u8* Hunk(u32 number) {
+        Slot* slot = &cache[0];
+        for (Slot& h : cache) {
+            if (h.number == number) { h.used = ++clock; return h.bytes.data(); }
+            if (h.used < slot->used) slot = &h;
+        }
+        slot->bytes.resize(hunk_bytes);
+        slot->number = ~0u;
+        const chd_error error = chd_read(file, number, slot->bytes.data());
+        if (error != CHDERR_NONE) {
+            std::fprintf(stderr, "disc: the .chd's hunk %u: %s\n", number, chd_error_string(error));
+            return nullptr;
+        }
+        slot->number = number;
+        slot->used = ++clock;
+        return slot->bytes.data();
+    }
+};
+
+Disc::~Disc() { Close(); }
+
+void Disc::Close() {
     if (file_) std::fclose(file_);
+    file_ = nullptr;
+    delete chd_;
+    chd_ = nullptr;
+    memory_.clear();
+    size_ = 0;
+    stride_ = kSectorSize;
+    data_offset_ = 0;
+    raw_ = cd_ = false;
+    sectors_ = 0;
 }
 
 namespace {
@@ -60,6 +107,9 @@ std::string CueImage(const std::string& cue_path) {
     return "";
 }
 
+// A CD .chd's frame: the 2352-byte sector, then its 96 bytes of subcode.
+constexpr u32 kCdFrameSize = 2448;
+
 const u8 kSync[12] = {0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00};
 
 u8 ToBcd(u32 v) { return u8((v / 10) << 4 | (v % 10)); }
@@ -67,9 +117,7 @@ u8 ToBcd(u32 v) { return u8((v / 10) << 4 | (v % 10)); }
 }  // namespace
 
 bool Disc::Open(const std::string& path) {
-    if (file_) std::fclose(file_);
-    file_ = nullptr;
-    memory_.clear();
+    Close();
     std::string image = path;
     if (image.size() > 4 && Upper(image.substr(image.size() - 4)) == ".CUE") {
         image = CueImage(path);
@@ -77,6 +125,12 @@ bool Disc::Open(const std::string& path) {
     }
     file_ = std::fopen(image.c_str(), "rb");
     if (!file_) return false;
+    char magic[8] = {};
+    if (std::fread(magic, 1, 8, file_) == 8 && std::memcmp(magic, "MComprHD", 8) == 0) {
+        std::fclose(file_);
+        file_ = nullptr;
+        return OpenChd(image);
+    }
     _fseeki64(file_, 0, SEEK_END);
     size_ = u64(_ftelli64(file_));
     DetectFormat();
@@ -84,25 +138,85 @@ bool Disc::Open(const std::string& path) {
 }
 
 void Disc::Use(std::vector<u8> image) {
+    Close();
     memory_ = std::move(image);
     size_ = memory_.size();
     DetectFormat();
 }
 
+// A .chd: its bytes are its hunks', one after the other. A DVD's (createdvd)
+// are its 2048-byte sectors; a CD's (createcd) 2448-byte frames - the raw
+// sector or the track's own sector, then the subcode - the first track's type
+// in the metadata.
+bool Disc::OpenChd(const std::string& path) {
+    Chd* chd = chd_ = new Chd;
+    const chd_error opened = chd_open(path.c_str(), CHD_OPEN_READ, nullptr, &chd->file);
+    if (opened != CHDERR_NONE) {
+        std::fprintf(stderr, "disc: libchdr cannot open %s: %s\n", path.c_str(), chd_error_string(opened));
+        chd->file = nullptr;
+        Close();
+        return false;
+    }
+    const chd_header* header = chd_get_header(chd->file);
+    if (!header || header->hunkbytes == 0) return Close(), false;
+    chd->hunk_bytes = header->hunkbytes;
+    char meta[256] = {};
+    u32 length = 0;
+    const bool cd = chd_get_metadata(chd->file, CDROM_TRACK_METADATA2_TAG, 0, meta, sizeof meta - 1, &length,
+                                     nullptr, nullptr) == CHDERR_NONE ||
+                    chd_get_metadata(chd->file, CDROM_TRACK_METADATA_TAG, 0, meta, sizeof meta - 1, &length,
+                                     nullptr, nullptr) == CHDERR_NONE;
+    size_ = header->logicalbytes;
+    if (!cd && header->unitbytes != kCdFrameSize) {
+        sectors_ = u32(size_ / kSectorSize);
+        return true;
+    }
+    cd_ = true;
+    stride_ = kCdFrameSize;
+    // TRACK:1 TYPE:MODE2_RAW SUBTYPE:NONE FRAMES:1234 PREGAP:0 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0
+    int track = 0, frames = 0, pregap = 0;
+    char type[32] = {}, subtype[32] = {}, pgtype[32] = {};
+    const int fields = std::sscanf(meta, "TRACK:%d TYPE:%31s SUBTYPE:%31s FRAMES:%d PREGAP:%d PGTYPE:%31s",
+                                   &track, type, subtype, &frames, &pregap, pgtype);
+    const std::string kind = fields >= 2 ? type : "MODE2_RAW";
+    // A pregap kept in the file (its type "V...") comes before the track's first sector.
+    if (fields >= 6 && pgtype[0] == 'V' && pregap > 0) chd_->base = u64(pregap) * kCdFrameSize;
+    size_ = size_ > chd_->base ? size_ - chd_->base : 0;
+    sectors_ = u32(size_ / stride_);
+    if (fields >= 4 && frames > 0 && u32(frames) < sectors_) sectors_ = u32(frames);
+    if (kind == "AUDIO") return Close(), false;
+    if (kind.find("_RAW") != std::string::npos) {
+        if (!DetectRaw(kCdFrameSize)) data_offset_ = kind == "MODE1_RAW" ? 16 : 24, raw_ = true;
+    } else if (kind == "MODE2" || kind == "MODE2_FORM_MIX") {
+        data_offset_ = 8;           // 2336 bytes: the subheader, then the data
+    }                               // MODE1, MODE2_FORM1: the 2048 bytes alone
+    return true;
+}
+
 // A raw image: every sector starts with the sync pattern, and sector 16 - the
 // volume descriptor, on every PS2 disc - says the mode.
 void Disc::DetectFormat() {
+    stride_ = kSectorSize;
     data_offset_ = 0;
+    raw_ = false;
+    DetectRaw(kRawSectorSize);
+    sectors_ = u32(size_ / stride_);
+}
+
+bool Disc::DetectRaw(u32 stride) {
     u8 head[16];
-    if (size_ >= 17 * u64(kRawSectorSize) && ReadBytes(16 * u64(kRawSectorSize), 16, head) &&
-        std::memcmp(head, kSync, 12) == 0 && (head[15] == 1 || head[15] == 2))
-        data_offset_ = head[15] == 1 ? 16 : 24;
-    sectors_ = u32(size_ / (data_offset_ ? kRawSectorSize : kSectorSize));
+    if (size_ < 17 * u64(stride) || !ReadBytes(16 * u64(stride), 16, head) ||
+        std::memcmp(head, kSync, 12) != 0 || (head[15] != 1 && head[15] != 2))
+        return false;
+    stride_ = stride;
+    data_offset_ = head[15] == 1 ? 16 : 24;
+    raw_ = true;
+    return true;
 }
 
 bool Disc::IsCd() const {
     // A CD holds at most about 360,000 sectors (80 minutes); a DVD image is raw-less.
-    return data_offset_ != 0 || sectors_ <= 360000;
+    return raw_ || cd_ || sectors_ <= 360000;
 }
 
 bool Disc::ReadBytes(u64 offset, u64 length, u8* out) {
@@ -111,19 +225,30 @@ bool Disc::ReadBytes(u64 offset, u64 length, u8* out) {
         std::memcpy(out, memory_.data() + offset, size_t(length));
         return true;
     }
+    std::lock_guard<std::mutex> lock(mutex_);     // the IOP's reads and the EE's
+    if (chd_) {
+        for (u64 at = offset + chd_->base; length > 0;) {
+            const u8* hunk = chd_->Hunk(u32(at / chd_->hunk_bytes));
+            if (!hunk) return false;
+            const u64 within = at % chd_->hunk_bytes;
+            const u64 n = std::min<u64>(length, chd_->hunk_bytes - within);
+            std::memcpy(out, hunk + within, size_t(n));
+            out += n, at += n, length -= n;
+        }
+        return true;
+    }
     if (!file_ || _fseeki64(file_, s64(offset), SEEK_SET) != 0) return false;
     return std::fread(out, 1, size_t(length), file_) == length;
 }
 
 bool Disc::Read(u32 lsn, u32 count, u8* out) {
     if (u64(lsn) + count > sectors_) return false;
-    if (!data_offset_) return ReadBytes(u64(lsn) * kSectorSize, u64(count) * kSectorSize, out);
+    if (stride_ == kSectorSize) return ReadBytes(u64(lsn) * kSectorSize, u64(count) * kSectorSize, out);
     // Raw: read the whole run at once, then keep each sector's data.
-    std::vector<u8> raw(std::size_t(count) * kRawSectorSize);
-    if (!ReadBytes(u64(lsn) * kRawSectorSize, raw.size(), raw.data())) return false;
+    std::vector<u8> raw(std::size_t(count) * stride_);
+    if (!ReadBytes(u64(lsn) * stride_, raw.size(), raw.data())) return false;
     for (u32 i = 0; i < count; ++i)
-        std::memcpy(out + std::size_t(i) * kSectorSize, &raw[std::size_t(i) * kRawSectorSize + data_offset_],
-                    kSectorSize);
+        std::memcpy(out + std::size_t(i) * kSectorSize, &raw[std::size_t(i) * stride_ + data_offset_], kSectorSize);
     return true;
 }
 
@@ -136,8 +261,8 @@ bool Disc::ReadPattern(u32 lsn, u32 count, u32 pattern, u8* out) {
     std::vector<u8> raw(kRawSectorSize);
     for (u32 i = 0; i < count; ++i) {
         u8* dst = out + std::size_t(i) * size;
-        if (data_offset_) {
-            if (!ReadBytes(u64(lsn + i) * kRawSectorSize, kRawSectorSize, raw.data())) return false;
+        if (raw_) {
+            if (!ReadBytes(u64(lsn + i) * stride_, kRawSectorSize, raw.data())) return false;
             std::memcpy(dst, &raw[from], size);
             continue;
         }

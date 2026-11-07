@@ -14,6 +14,7 @@
 #include <io.h>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -164,6 +165,190 @@ void DiscFindsFilesByPath() {
     Check(disc.ReadPattern(21, 1, 2, big.data()) && big[3] == 2 && std::memcmp(&big[12], "hello", 5) == 0,
           "an .iso's 2340-byte read has a made header");
     Check(!cd.Read(24, 1, sector), "reading past a raw image's end");
+}
+
+// Two tiny .chd files (CHD v5) made from synthetic sectors by a CHD writer of
+// our own, not chdman, with chdman's codecs: a DVD's - 12 sectors, a hunk each,
+// zlib and lzma in turn, the repeated zero sectors (every fourth) references to
+// the first - and a CD's - 8 sectors as Mode 2 frames with their subcode, 2 a
+// hunk, cdzl and cdlz, a CHT2 track (MODE2_RAW).
+// Sector i: i (4 bytes), then (i * 7 + (j & 15)) & 0xFF; zero when i % 4 == 3.
+const unsigned char kChdDvd[] = {
+    77,67,111,109,112,114,72,68,0,0,0,124,0,0,0,5,122,108,105,98,108,122,109,97,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,96,0,0,0,0,0,0,0,1,243,
+    0,0,0,0,0,0,2,45,0,0,8,0,0,0,8,0,5,125,134,151,198,74,133,87,
+    60,94,152,182,118,86,192,13,67,190,66,94,173,184,200,69,155,106,210,138,136,56,11,229,
+    35,84,36,44,200,122,34,229,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,99,96,96,96,96,97,101,99,231,224,228,226,230,225,229,227,103,96,100,98,
+    30,229,143,242,71,249,163,252,81,254,40,127,148,63,188,249,0,0,0,128,60,123,132,20,
+    144,243,152,246,212,91,156,63,167,237,164,30,168,188,114,189,216,2,120,97,52,104,49,122,
+    121,93,18,52,242,206,255,255,245,240,128,0,99,98,96,96,16,18,22,17,21,19,151,144,
+    148,146,150,145,229,227,23,16,28,229,143,242,71,249,163,252,81,254,40,127,148,63,188,249,
+    0,0,0,111,253,255,255,163,183,255,71,62,72,21,112,149,172,165,214,255,255,138,40,0,
+    0,99,97,96,96,80,80,84,82,86,81,85,83,215,208,212,210,150,145,149,147,31,229,143,
+    242,71,249,163,252,81,254,40,127,148,63,188,249,0,0,2,128,54,196,228,197,145,183,243,
+    230,161,164,78,2,3,105,213,57,245,116,198,199,174,104,23,234,44,119,48,59,49,2,30,
+    190,211,7,255,255,253,6,192,0,99,99,96,96,208,211,55,48,52,50,54,49,53,51,183,
+    176,212,210,214,209,29,229,143,242,71,249,163,252,81,254,40,127,148,63,188,249,0,227,96,
+    96,96,176,177,181,179,119,112,116,114,118,113,117,115,183,176,180,178,30,229,143,242,71,249,
+    163,252,81,254,40,127,148,63,188,249,0,0,4,128,53,1,145,151,98,173,36,149,35,190,
+    28,51,39,154,27,173,35,55,163,60,146,138,97,237,117,188,89,112,67,70,139,245,32,99,
+    175,255,254,244,184,0,227,98,96,96,240,242,246,241,245,243,15,8,12,10,14,9,117,115,
+    247,240,28,229,143,242,71,249,163,252,81,254,40,127,148,63,188,249,0,0,0,0,42,0,
+    0,0,0,0,124,10,54,6,2,0,0,68,68,68,68,68,68,68,68,1,1,1,5,1,
+    9,148,92,122,179,43,41,110,254,24,197,132,150,135,38,182,235,233,72,95,121,106,241,107,
+    231,234,149,176,0,68,86,68,32,1,0,0,1,0,0,0,0,0,0,0,0,0,
+};
+const unsigned char kChdCd[] = {
+    77,67,111,109,112,114,72,68,0,0,0,124,0,0,0,5,99,100,122,108,99,100,108,122,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,76,128,0,0,0,0,0,0,2,25,
+    0,0,0,0,0,0,2,63,0,0,19,32,0,0,9,144,32,233,110,4,240,71,57,221,
+    123,218,159,28,228,96,72,208,43,31,159,120,58,109,179,213,121,208,40,99,145,183,232,116,
+    132,137,79,10,134,181,162,199,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,85,237,214,73,10,128,48,16,68,209,74,156,226,24,231,251,223,84,
+    131,66,64,112,175,132,95,77,55,188,109,175,74,71,140,100,195,200,233,94,41,47,202,202,
+    213,77,219,245,131,151,177,25,198,24,99,140,19,55,121,207,163,47,153,216,151,76,184,215,
+    227,198,105,94,214,109,143,143,196,24,99,140,113,178,254,186,150,252,53,39,99,80,245,202,
+    159,178,243,30,51,3,141,104,40,165,65,43,26,0,0,0,76,0,0,63,245,18,0,0,
+    38,89,206,60,148,131,18,62,238,1,86,246,65,210,19,24,11,204,57,162,176,76,65,115,
+    116,156,46,211,152,241,105,193,145,124,137,106,27,8,85,68,160,37,204,176,5,33,150,43,
+    116,184,28,28,208,254,192,249,112,55,147,37,107,0,239,191,255,113,235,192,0,243,202,159,
+    178,243,30,179,134,175,23,141,104,40,85,68,43,26,0,0,0,91,237,214,73,10,128,48,
+    16,68,209,38,36,224,33,156,231,121,186,255,221,52,186,8,8,238,149,240,11,186,225,109,
+    107,85,114,184,136,40,173,68,2,185,78,219,159,102,121,81,86,117,211,118,253,16,70,113,
+    130,49,198,24,99,191,45,228,61,143,189,100,220,94,50,246,223,197,141,211,188,172,219,238,
+    138,196,24,99,140,177,183,254,122,150,252,53,39,155,178,243,30,179,134,111,209,244,41,52,
+    162,161,212,30,90,209,0,0,0,77,0,0,63,245,18,0,0,28,134,201,76,149,42,232,
+    185,136,210,146,121,199,112,99,127,20,218,59,170,237,57,207,153,6,29,141,107,81,5,15,
+    51,95,80,201,205,98,0,100,52,175,200,198,71,217,157,196,232,79,254,201,103,78,244,148,
+    246,227,70,250,22,31,141,35,99,43,95,253,175,147,0,187,199,172,225,91,52,125,207,195,
+    123,52,162,161,20,27,173,104,0,0,0,0,22,0,0,0,0,0,124,66,242,7,0,0,
+    0,68,68,68,68,68,68,68,68,1,1,213,105,129,132,30,111,129,84,14,36,38,112,67,
+    72,84,50,1,0,0,84,0,0,0,0,0,0,0,0,84,82,65,67,75,58,49,32,84,
+    89,80,69,58,77,79,68,69,50,95,82,65,87,32,83,85,66,84,89,80,69,58,82,87,
+    32,70,82,65,77,69,83,58,56,32,80,82,69,71,65,80,58,48,32,80,71,84,89,80,
+    69,58,77,79,68,69,49,32,80,71,83,85,66,58,82,87,32,80,79,83,84,71,65,80,
+    58,48,0,
+};
+
+bool SynthSector(u32 lsn, const u8* sector) {
+    for (u32 j = 0; j < ps2host::kSectorSize; ++j) {
+        const u8 want = lsn % 4 == 3 ? 0 : j < 4 ? u8(lsn >> (8 * j)) : u8(lsn * 7 + (j & 15));
+        if (sector[j] != want) return false;
+    }
+    return true;
+}
+
+std::string WriteTemp(const char* name, const unsigned char* bytes, std::size_t size) {
+    const std::string path = (std::filesystem::temp_directory_path() / name).string();
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes), std::streamsize(size));
+    return path;
+}
+
+void DiscReadsChd() {
+    using ps2host::kSectorSize;
+    ps2host::Disc dvd;
+    const std::string dvd_path = WriteTemp("ps2host_test_dvd.chd", kChdDvd, sizeof kChdDvd);
+    Check(dvd.Open(dvd_path) && dvd.Sectors() == 12, "a DVD's .chd opens, its sectors counted");
+    std::vector<u8> all(12 * kSectorSize);
+    bool same = dvd.Read(0, 12, all.data());
+    for (u32 i = 0; i < 12; ++i) same = same && SynthSector(i, &all[i * kSectorSize]);
+    Check(same, "a DVD .chd's sectors: zlib, lzma and repeated hunks");
+    u8 sector[kSectorSize];
+    Check(dvd.Read(5, 1, sector) && SynthSector(5, sector), "a DVD .chd's sector alone");
+    Check(!dvd.Read(12, 1, sector), "reading past a .chd's end");
+    std::vector<u8> big(2340);
+    Check(dvd.ReadPattern(5, 1, 2, big.data()) && big[3] == 2 && SynthSector(5, &big[12]),
+          "a DVD .chd's 2340-byte read has a made header");
+
+    ps2host::Disc cd;
+    const std::string cd_path = WriteTemp("ps2host_test_cd.chd", kChdCd, sizeof kChdCd);
+    Check(cd.Open(cd_path) && cd.Sectors() == 8 && cd.IsCd(), "a CD's .chd opens as a CD");
+    same = cd.Read(0, 8, all.data());
+    for (u32 i = 0; i < 8; ++i) same = same && SynthSector(i, &all[i * kSectorSize]);
+    Check(same, "a CD .chd's sectors: the data out of each 2448-byte frame (cdzl, cdlz)");
+    Check(cd.ReadPattern(5, 1, 2, big.data()) && big[0] == 0x00 && big[1] == 0x02 && big[2] == 0x05 &&
+              big[3] == 2 && big[6] == 8 && SynthSector(5, &big[12]),
+          "a CD .chd's 2340-byte read: the frame's own header (00:02:05, Mode 2), subheader, data");
+    Check(cd.ReadPattern(5, 1, 1, big.data()) && SynthSector(5, &big[0]),
+          "a CD .chd's 2328-byte read starts at the data");
+
+    // A damaged hunk: libchdr's CRC refuses it, and so does the read.
+    std::vector<unsigned char> bad(kChdDvd, kChdDvd + sizeof kChdDvd);
+    bad[200] ^= 0x55;
+    const std::string bad_path = WriteTemp("ps2host_test_bad.chd", bad.data(), bad.size());
+    bool any_failed = false;
+    {
+        ps2host::Disc damaged;
+        if (damaged.Open(bad_path))
+            for (u32 i = 0; i < 12; ++i) any_failed = !damaged.Read(i, 1, sector) || any_failed;
+        else
+            any_failed = true;
+    }
+    Check(any_failed, "a damaged .chd's hunk is not read as good");
+    dvd.Open("");
+    cd.Open("");
+    std::filesystem::remove(dvd_path);
+    std::filesystem::remove(cd_path);
+    std::filesystem::remove(bad_path);
+}
+
+/* PS2HOST_DISC_COMPARE="<image>|<image>": every sector of the two read through
+   Disc and compared (an .iso and a .chd of it, say), in runs, then scattered
+   reads of the second from four threads at once; the time each took. A
+   tool's mode, not a test. */
+int DiscCompare(const std::string& spec) {
+    const std::size_t bar = spec.find('|');
+    if (bar == std::string::npos) return 2;
+    ps2host::Disc a, b;
+    if (!a.Open(spec.substr(0, bar)) || !b.Open(spec.substr(bar + 1))) {
+        std::printf("disc compare: cannot open both images\n");
+        return 2;
+    }
+    std::printf("disc compare: %u and %u sectors, %s and %s\n", a.Sectors(), b.Sectors(),
+                a.IsCd() ? "CD" : "DVD", b.IsCd() ? "CD" : "DVD");
+    // A shorter second image (a test .chd of the first sectors only): those compared.
+    const u32 total = std::min(a.Sectors(), b.Sectors()), run = 32;
+    if (total < 8) return 1;
+    std::vector<u8> x(run * ps2host::kSectorSize), y(x.size());
+    u64 differ = 0;
+    double seconds[2] = {};
+    for (u32 lsn = 0; lsn < total; lsn += run) {
+        const u32 n = std::min(run, total - lsn);
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ra = a.Read(lsn, n, x.data());
+        const auto t1 = std::chrono::steady_clock::now();
+        const bool rb = b.Read(lsn, n, y.data());
+        const auto t2 = std::chrono::steady_clock::now();
+        seconds[0] += std::chrono::duration<double>(t1 - t0).count();
+        seconds[1] += std::chrono::duration<double>(t2 - t1).count();
+        if (!ra || !rb || std::memcmp(x.data(), y.data(), std::size_t(n) * ps2host::kSectorSize) != 0) {
+            if (differ < 5) std::printf("disc compare: sectors %u-%u differ (%d %d)\n", lsn, lsn + n - 1, ra, rb);
+            ++differ;
+        }
+    }
+    std::printf("disc compare: %llu runs differ; read in %.1f s and %.1f s\n", (unsigned long long)differ,
+                seconds[0], seconds[1]);
+    std::atomic<u64> wrong{0};
+    std::mutex a_lock;
+    std::vector<std::thread> threads;
+    for (u32 t = 0; t < 4; ++t)
+        threads.emplace_back([&, t] {
+            std::vector<u8> p(8 * ps2host::kSectorSize), q(p.size());
+            for (u32 k = 0; k < 20000; ++k) {
+                const u32 at = u32((u64(k * 4 + t) * 2654435761u) % (total - 7));     // scattered, as streams seek
+                const bool rb = b.Read(at, 8, q.data());
+                bool ra;
+                {
+                    std::lock_guard<std::mutex> lock(a_lock);
+                    ra = a.Read(at, 8, p.data());
+                }
+                if (!ra || !rb || std::memcmp(p.data(), q.data(), p.size()) != 0) ++wrong;
+            }
+        });
+    for (std::thread& th : threads) th.join();
+    std::printf("disc compare: 80000 reads from four threads, %llu wrong\n", (unsigned long long)wrong.load());
+    return differ || wrong ? 1 : 0;
 }
 
 void BiosIsReadOnly() {
@@ -2704,6 +2889,7 @@ int main() {
         IpuIdecExternalCase();
         return 0;
     }
+    if (const char* spec = std::getenv("PS2HOST_DISC_COMPARE")) return DiscCompare(spec);
     MirrorsReachTheSameRam();
     LoadsExtendAsTheEeDoes();
     OutsideMemoryFaults();
@@ -2711,6 +2897,7 @@ int main() {
     BiosIsReadOnly();
     Kseg1ReachesDeviceRegisters();
     DiscFindsFilesByPath();
+    DiscReadsChd();
     WideWritesReachEveryWordsHook();
     VifSkipsDataAndAppliesMaskPath3();
     DmaChainsAreWalked();

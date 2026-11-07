@@ -88,6 +88,18 @@ endforeach()
 target_include_directories(ps2host PRIVATE ${third_party_dir})
 target_sources(ps2host PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src/texture_pack.cpp)
 
+# Disc images kept as MAME .chd (disc.cpp): libchdr (BSD-3-Clause), built from
+# its source pinned by commit, with the decoders it carries (LZMA SDK: public
+# domain; miniz: MIT; zstd: BSD), linked in.
+include(FetchContent)
+FetchContent_Declare(libchdr
+    GIT_REPOSITORY https://github.com/rtissera/libchdr.git
+    GIT_TAG 47d794151b2b64f6aba60304e6480f4f5a2bc24b)
+set(CHDR_WANT_TESTS OFF CACHE BOOL "" FORCE)
+set(INSTALL_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(libchdr)
+target_link_libraries(ps2host PRIVATE chdr-static)
+
 # The window through SDL3 and Vulkan (engine/gpu), with GDI as the fallback.
 option(PS2HOST_VULKAN "Present the picture through SDL3 and Vulkan" ON)
 if(PS2HOST_VULKAN)

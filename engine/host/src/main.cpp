@@ -90,7 +90,7 @@ std::string PickDisc() {
     char file[MAX_PATH] = {};
     OPENFILENAMEA dialog = {};
     dialog.lStructSize = sizeof dialog;
-    dialog.lpstrFilter = "Disc images (*.iso; *.cue; *.bin)\0*.iso;*.cue;*.bin\0All files (*.*)\0*.*\0";
+    dialog.lpstrFilter = "Disc images (*.iso; *.chd; *.cue; *.bin)\0*.iso;*.chd;*.cue;*.bin\0All files (*.*)\0*.*\0";
     dialog.lpstrFile = file;
     dialog.nMaxFile = MAX_PATH;
     dialog.lpstrTitle = "Choose your " PS2HOST_GAME_NAME " disc image";
