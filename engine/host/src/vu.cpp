@@ -380,7 +380,8 @@ void Vu::Upper(u32 word, int* written_reg, u32* written_lanes, bool* set_flags, 
         if ((index >= 0x10 && index <= 0x17) || index == 0x1D) target = int(ft);   // ITOF, FTOI, ABS
         else flags = true;                                  // the accumulator forms
     }
-    if (fmac) lifted::RunFmac(regs, *fmac);
+    if (fmac && ps2_floats) lifted::RunFmacPs2(regs, *fmac);
+    else if (fmac) lifted::RunFmac(regs, *fmac);
     else lifted::Cop2(regs, kCop2 | (word & 0x01FFFFFF));
     if (target > 0) {
         *written_reg = target;
@@ -389,11 +390,13 @@ void Vu::Upper(u32 word, int* written_reg, u32* written_lanes, bool* set_flags, 
     if (flags && target == 0) {
         // Into VF0: the flags are the result's, which went nowhere.
         if (fmac) {
-            lifted::FmacResult(regs, *fmac, discarded_);
+            if (ps2_floats) lifted::FmacResultPs2(regs, *fmac, discarded_);
+            else lifted::FmacResult(regs, *fmac, discarded_);
         } else {
             lifted::FmacOp decoded;
             if (lifted::DecodeFmac(kCop2 | (word & 0x01FFFFFF), &decoded)) {
-                lifted::FmacResult(regs, decoded, discarded_);
+                if (ps2_floats) lifted::FmacResultPs2(regs, decoded, discarded_);
+                else lifted::FmacResult(regs, decoded, discarded_);
             } else if (funct == 0x2E) {                     // OPMSUB (it wrote nothing: its operands stand)
                 const u32 *a = regs.vf[Field(word, 11, 5)], *b = regs.vf[ft], *acc = regs.vacc;
                 const u32 out[3] = {lifted::Binary(lifted::kMsub, a[1], b[2], acc[0]),

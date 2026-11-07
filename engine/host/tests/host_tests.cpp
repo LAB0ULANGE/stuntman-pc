@@ -1729,6 +1729,26 @@ void VuFastIsTheExactButFlags() {
     Check(flags_differ > runs / 4, what);
 }
 
+// float_model=ps2 reaches VU0's microprograms (Vu::ps2_floats): add.x vf3, vf1,
+// vf2 of 1 and -1e-10 keeps the 1 only under the hardware's adder.
+void Vu0MicroprogramsUseTheModel() {
+    const std::uint32_t kNopU = 0x000002FF, kNopL = 0x8000033C, kEnd = 0x40000000;
+    const std::uint32_t add = 8u << 21 | 2u << 16 | 1u << 11 | 3u << 6 | 0x28;
+    const std::uint32_t program[] = {kNopL, kEnd | add, kNopL, kNopU};
+    auto result = [&](bool model) {
+        ps2host::Vu vu(0);
+        vu.ps2_floats = model;
+        vu.use_compiled = !model;
+        vu.regs.vf[1][0] = 0x3F800000u;
+        vu.regs.vf[2][0] = 0xAEDBE6FFu;
+        std::memcpy(vu.micro.data(), program, sizeof program);
+        vu.Run(0);
+        return vu.regs.vf[3][0];
+    };
+    Check(result(true) == 0x3F800000u && result(false) == 0x3F7FFFFFu,
+          "float_model=ps2: VU0's microprograms add as the hardware's adder");
+}
+
 void VuTimingIsVisible() {
     ps2host::Vu vu(0);
     auto f = [](float x) { std::uint32_t u; std::memcpy(&u, &x, 4); return u; };
@@ -2837,6 +2857,7 @@ int main() {
     FileIoCompletesAsynchronousRequests();
     PadmanSetActAlignIsDone();
     FloatModelIsTheHardwares();
+    Vu0MicroprogramsUseTheModel();
     McservCountsFreeEntries();
     McservTakesAnyName();
     VuLanesAreTheModel();

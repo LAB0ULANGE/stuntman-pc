@@ -94,6 +94,9 @@ public:
     u64 kicks() const { return kicks_; }
     /* Whether Run takes compiled programs where it has them (the tests run
        the interpreter alone to compare). */
+    // float_model=ps2 on VU0: its FMACs as the PS2 computes them. Interpreted
+    // (use_compiled off): the compiled blocks are the chop model.
+    bool ps2_floats = false;
     bool use_compiled = true;
     /* --vu-fast: compiled VU1 programs that never read MAC or STATUS run
        blocks that do not compute them (VuCompiled::fast_blocks): faster, and

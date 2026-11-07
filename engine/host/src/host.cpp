@@ -697,6 +697,11 @@ int Run(const Options& options) {
     // bit for bit, else each result exact and rounded toward zero (the default;
     // PS2RT_EE_FLOAT=ps2 sets it too, for a scripted run).
     if (Setting("float_model", "") == "ps2") generated::SetFloatModel(true);
+    // VU0 too, when the game computes with it (PS2HOST_VU0_CHOP=1: left as it was).
+    if (generated::Ps2FloatModel() && !std::getenv("PS2HOST_VU0_CHOP")) {
+        Vu0().ps2_floats = true;
+        Vu0().use_compiled = false;
+    }
     SetUntilFrame(options.until_frame);
     SetFrameTimes(options.frame_times);
     gs::TheGs().whole_qwords =

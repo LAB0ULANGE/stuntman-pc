@@ -226,13 +226,19 @@ static u32 Ps2Lane(int op, u32 a, u32 b, u32 acc) {
     return Binary(op, a, b, acc);
 }
 
-static void RunFmacPs2(Context& c, const FmacOp& f) {
-    u32 out[4] = {};
+void FmacResultPs2(const Context& c, const FmacOp& f, u32 out[4]) {
     const u32 broadcast = f.operand < 4 ? c.vf[f.ft][f.operand]
                         : f.operand == 4 ? c.vc[kRegQ] : f.operand == 5 ? c.vc[kRegI] : 0;
-    for (int lane = 0; lane < 4; ++lane)
+    for (int lane = 0; lane < 4; ++lane) {
+        out[lane] = 0;
         if (f.dest & (8u >> lane))
             out[lane] = Ps2Lane(f.op, c.vf[f.fs][lane], f.operand == 6 ? c.vf[f.ft][lane] : broadcast, c.vacc[lane]);
+    }
+}
+
+void RunFmacPs2(Context& c, const FmacOp& f) {
+    u32 out[4];
+    FmacResultPs2(c, f, out);
     u32* to = f.to_acc ? c.vacc : f.fd ? c.vf[f.fd] : nullptr;
     if (!to) return;
     for (int lane = 0; lane < 4; ++lane)

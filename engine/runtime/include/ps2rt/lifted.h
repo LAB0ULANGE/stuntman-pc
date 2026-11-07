@@ -151,6 +151,10 @@ void RunFmac(Context& c, const FmacOp& op);
    an operation into VF0, which keeps 0, 0, 0, 1 but whose flags are this
    result's. */
 void FmacResult(const Context& c, const FmacOp& op, u32 out[4]);
+/* Both under the float_model=ps2 arithmetic (generated::Ps2Float*), whatever
+   model is chosen: VU0's microprograms, as its macro mode. */
+void RunFmacPs2(Context& c, const FmacOp& op);
+void FmacResultPs2(const Context& c, const FmacOp& op, u32 out[4]);
 /* The same, a lane at a time through the arithmetic model (vu_math.h):
    what RunFmac's four lanes at once must equal. */
 void RunFmacScalar(Context& c, const FmacOp& op);
