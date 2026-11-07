@@ -111,6 +111,7 @@ def package_linux(version: str) -> int:
         readme = f.read().replace("{version}", version).replace("{glibc}", glibc)
     with open(os.path.join(PORT, "release", "pc_settings.ini"), encoding="utf-8") as f:
         settings = f.read()
+    third_party = notices()                 # (before the archive: none left half written)
 
     out_dir = os.path.join(BUILD, "release")
     os.makedirs(out_dir, exist_ok=True)
@@ -131,7 +132,7 @@ def package_linux(version: str) -> int:
         add(tar, "stuntman", exe, 0o755)
         add(tar, "README.txt", lf(readme), 0o644)
         add(tar, "pc_settings.ini", lf(settings), 0o644)
-        add(tar, "THIRD-PARTY-NOTICES.txt", lf(notices()), 0o644)
+        add(tar, "THIRD-PARTY-NOTICES.txt", lf(third_party), 0o644)
     print("wrote %s (%.1f MB); the executable needs glibc %s or newer" % (out, os.path.getsize(out) / 1e6, glibc))
     return 0
 
