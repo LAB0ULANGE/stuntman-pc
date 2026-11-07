@@ -5,6 +5,7 @@
 #include "ps2host/mc2.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <ctime>
@@ -80,9 +81,41 @@ bool Components(const std::string& name, std::vector<std::string>* parts) {
     return true;
 }
 
+// A device's name on Windows, whatever follows its first dot.
+bool DeviceName(const std::string& name) {
+    std::string stem = name.substr(0, name.find('.'));
+    while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+    for (char& ch : stem) ch = char(std::toupper(u8(ch)));
+    for (const char* device : {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"})
+        if (stem == device) return true;
+    return stem.size() == 4 && (stem.compare(0, 3, "COM") == 0 || stem.compare(0, 3, "LPT") == 0) && stem[3] >= '0' &&
+           stem[3] <= '9';
+}
+
+// The name with the bytes the host would not keep as private-use characters,
+// in UTF-8; `every_high` takes those of 0x80 and up too.
+std::string Escaped(const std::string& name, bool every_high) {
+    const bool device = DeviceName(name);
+    std::string out;
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        const u8 ch = u8(name[i]);
+        const bool last = i + 1 == name.size();
+        if (ch < 0x20 || std::strchr("<>:\"\\|?*", ch) || (last && (ch == '.' || ch == ' ')) || (i == 0 && device) ||
+            (every_high && ch >= 0x80)) {
+            const u32 code = 0xF000u + ch;
+            out += char(0xE0 | code >> 12);
+            out += char(0x80 | (code >> 6 & 0x3F));
+            out += char(0x80 | (code & 0x3F));
+        } else {
+            out += char(ch);
+        }
+    }
+    return out;
+}
+
 fs::path HostPath(const std::vector<std::string>& parts) {
     fs::path path = fs::u8path(Directory());
-    for (const std::string& part : parts) path /= fs::u8path(part);
+    for (const std::string& part : parts) path /= HostName(part);
     return path;
 }
 
@@ -115,7 +148,7 @@ struct Entry {
 
 Entry Describe(const fs::path& path) {
     Entry e;
-    e.name = path.filename().u8string();
+    e.name = CardName(path.filename());
     e.path = path;
     std::error_code error;
     e.directory = fs::is_directory(path, error);
@@ -185,6 +218,28 @@ u32 Resolve(lifted::Context& c, std::vector<std::string>* parts) {
 
 const std::string& CardDirectory() { return Directory(); }
 void SetCardDirectory(const std::string& directory) { Directory() = directory; }
+
+fs::path HostName(const std::string& card_name) {
+    try {
+        return fs::u8path(Escaped(card_name, false));
+    } catch (const std::system_error&) {        // bytes that are not UTF-8: a game's own encoding
+        return fs::u8path(Escaped(card_name, true));
+    }
+}
+
+std::string CardName(const fs::path& host_name) {
+    const std::string name = host_name.u8string();
+    std::string out;
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        if (u8(name[i]) == 0xEF && i + 2 < name.size() && (u8(name[i + 1]) & 0xFC) == 0x80) {
+            out += char((name[i + 1] & 3) << 6 | (name[i + 2] & 0x3F));    // U+F000 + the byte
+            i += 2;
+        } else {
+            out += name[i];
+        }
+    }
+    return out;
+}
 
 void GetInfo(lifted::Context& c) {
     const u32 info = u32(c.r[5]);

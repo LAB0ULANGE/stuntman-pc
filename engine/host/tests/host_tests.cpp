@@ -1445,6 +1445,83 @@ void McservCountsFreeEntries() {
     fs::remove_all(card, error);
 }
 
+// A card takes names Windows refuses (a player's career "<><" names its save's
+// directory): made, opened, written and listed under the name the game gave.
+void McservTakesAnyName() {
+    namespace fs = std::filesystem;
+    ps2host::Memory& m = ps2host::GuestMemory();
+    const fs::path card = fs::temp_directory_path() / "ps2host_tests_mcnames";
+    std::error_code error;
+    fs::remove_all(card, error);
+    const std::string saved = ps2host::mc2::CardDirectory();
+    ps2host::mc2::SetCardDirectory(card.u8string());
+    const u32 receive = 0x01E00000u, answer = 0x01E05000u, table = 0x01E06000u, bytes = 0x01E07000u;
+    ps2host::InstallMcserv();
+    const u32 server = BindSifServer(0x80000400u, receive);
+    auto call = [&](u32 procedure, std::vector<u32> request, const char* text) {
+        request.resize(0x414 / 4 + 1, 0);
+        if (text) std::strcpy(reinterpret_cast<char*>(request.data()) + 0x14, text);
+        std::vector<u32> header(16, 0);
+        header[2] = 0x8000000Au;
+        header[8] = procedure;
+        header[10] = answer;
+        header[11] = 4;
+        header[13] = server;
+        m.Write(answer, 0xEEEEEEEEu, 4);
+        SendSifPacket(header, request);
+        ps2host::DeliverIopReply();
+        return s32(m.Read(answer, 4));
+    };
+    auto listed = [&](u32 index) {
+        std::string name;
+        for (u32 i = 0; i < 32; ++i) {
+            const char ch = char(m.Read(table + 64 * index + 0x20 + i, 1));
+            if (!ch) break;
+            name += ch;
+        }
+        return name;
+    };
+    auto check = [](bool ok, const std::string& what) { Check(ok, what.c_str()); };
+    const std::string names[] = {"C<><",   "a:b",  "w?*",  "q\"|",   "back\\..\\slash",
+                                 "CON",    "lpt1.txt",     "dot.", "space ", "caf\xE9"};
+    for (const std::string& name : names) {
+        const std::string directory = "/" + name, file = directory + "/" + name;
+        check(call(0x02, {0, 0, 0x40}, directory.c_str()) == 0, "mcserv: a directory named " + name);
+        const s32 fd = call(0x02, {0, 0, 0x203}, file.c_str());
+        check(fd >= 0, "mcserv: a file named " + name);
+        m.Write(bytes, 0x5A, 1);
+        std::vector<u32> write(8, 0);                       // fd, +0xC size, +0x18 EE address
+        write[0] = u32(fd);
+        write[3] = 1;
+        write[6] = bytes;
+        check(call(0x06, write, nullptr) == 1, "mcserv: written under " + name);
+        call(0x03, {u32(fd)}, nullptr);
+        std::vector<u32> list(5, 0);                        // +0xC entries at most, +0x10 the table
+        list[3] = 4;
+        list[4] = table;
+        check(call(0x0D, list, (directory + "/*").c_str()) == 3 && listed(2) == name,
+              "mcserv: listed by the game's name, " + name);
+        m.Write(bytes, 0, 1);
+        const s32 again = call(0x02, {0, 0, 0x1}, file.c_str());
+        check(again >= 0, "mcserv: opened again, " + name);
+        std::vector<u32> read(8, 0);                        // fd, +0xC size, +0x18 EE buffer
+        read[0] = u32(again);
+        read[3] = 1;
+        read[6] = bytes;
+        check(call(0x05, read, nullptr) == 1 && m.Read(bytes, 1) == 0x5A, "mcserv: read back under " + name);
+        call(0x03, {u32(again)}, nullptr);
+    }
+    check(!fs::exists(card.parent_path() / "slash"), "mcserv: a backslash in a name stays in the card");
+    std::size_t kept = 0;
+    for (const auto& e : fs::directory_iterator(card, error)) {
+        (void)e;
+        ++kept;
+    }
+    check(kept == std::size(names), "mcserv: every name kept apart");
+    ps2host::mc2::SetCardDirectory(saved);
+    fs::remove_all(card, error);
+}
+
 // libmc2's handlers over a directory (mc2.h): a save made and read back, the
 // listing the game's "open" reads sizes from, the answers it maps to errors.
 void MemoryCardKeepsSaves() {
@@ -1501,6 +1578,20 @@ void MemoryCardKeepsSaves() {
     c.r[6] = kEntries;
     Check(call(mc2::Lookup) == 0x81010011 && (generated::ReadU32(kEntries) & 0x20) != 0,
           "memory card: the lookup finds a directory");
+    name("A<B");
+    c.r[6] = 0x8427;
+    Check(call(mc2::Create) == 0, "memory card: a directory under a name the host refuses");
+    name("A<B");
+    c.r[6] = kEntries;
+    Check(call(mc2::Lookup) == 0x81010011 && generated::ReadU8(kEntries + 0x41) == '<',
+          "memory card: the lookup gives the card's name back");
+    for (const std::string& kept : {std::string("BESLES-50288CVIC"), std::string("BES-1.txt"), std::string("100%")})
+        Check(mc2::HostName(kept).u8string() == kept, "memory card: a name the host takes stays as it is");
+    {
+        std::string every_byte;
+        for (int b = 1; b < 256; ++b) every_byte += char(b);
+        Check(mc2::CardName(mc2::HostName(every_byte)) == every_byte, "memory card: any bytes come back");
+    }
     c.r[5] = kBuffer;
     Check(call(mc2::GetInfo) == 0 && generated::ReadU32(kBuffer) == 2 && generated::ReadU32(kBuffer + 4) == 1 &&
               generated::ReadU32(kBuffer + 8) < 8000,
@@ -2747,6 +2838,7 @@ int main() {
     PadmanSetActAlignIsDone();
     FloatModelIsTheHardwares();
     McservCountsFreeEntries();
+    McservTakesAnyName();
     VuLanesAreTheModel();
     VuCompiledIsTheInterpreter();
     VuFastIsTheExactButFlags();

@@ -124,7 +124,7 @@ bool HostPath(const std::string& card_path, fs::path* out) {
         parts.push_back(part);
     }
     fs::path path = fs::u8path(mc2::CardDirectory());
-    for (const std::string& p : parts) path /= fs::u8path(p);
+    for (const std::string& p : parts) path /= mc2::HostName(p);
     *out = path;
     return true;
 }
@@ -271,8 +271,8 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& data) {
             out.seekp(f->second.position);
             out.write(bytes.data(), std::streamsize(bytes.size()));
             f->second.position += u32(bytes.size());
-            Note("mc write " + f->second.path.filename().string(),
-                 "MC: wrote " + f->second.path.filename().u8string());
+            const std::string written = mc2::CardName(f->second.path.filename());
+            Note("mc write " + written, "MC: wrote " + written);
             return Result(s32(bytes.size()));
         }
         case 0x0A: case 0x0E: case 0x10: case 0x14:
@@ -311,13 +311,13 @@ std::vector<u8> Server(u32 procedure, const std::vector<u8>& data) {
                     if (Matches(pattern.c_str(), "..")) card.listing.push_back(path / "..");
                 }
                 for (const auto& e : fs::directory_iterator(path, error))
-                    if (Matches(pattern.c_str(), e.path().filename().u8string().c_str()))
+                    if (Matches(pattern.c_str(), mc2::CardName(e.path().filename()).c_str()))
                         card.listing.push_back(e.path());
             }
             s32 count = 0;
             while (card.listed < card.listing.size() && count < most) {
                 const fs::path& p = card.listing[card.listed++];
-                const std::string entry_name = p.filename().u8string();
+                const std::string entry_name = mc2::CardName(p.filename());
                 PutEntry(table + 64 * u32(count), entry_name == "." || entry_name == ".." ? p.parent_path() : p,
                          entry_name);
                 ++count;

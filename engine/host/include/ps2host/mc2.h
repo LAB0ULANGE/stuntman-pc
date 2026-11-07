@@ -20,6 +20,7 @@
 #ifndef PS2HOST_MC2_H
 #define PS2HOST_MC2_H
 
+#include <filesystem>
 #include <string>
 
 #include "ps2rt/lifted.h"
@@ -31,6 +32,15 @@ namespace mc2 {
    none, through its own handlers). */
 const std::string& CardDirectory();
 void SetCardDirectory(const std::string& directory);
+
+/* A card's names are bytes, and games build them from what the player typed;
+   a host directory refuses some (<>:"\|?*, CON, a final dot or space) and
+   splits on others. One component of a card path as the name on the host, and
+   back: a byte the host would not keep goes as the private-use character
+   U+F000 + the byte (as Cygwin and WSL do), so every other name, those of
+   saves already on disk among them, stays what it is. */
+std::filesystem::path HostName(const std::string& card_name);
+std::string CardName(const std::filesystem::path& host_name);
 
 /* (socket, SceMc2InfoParam*): type 2 (a PS2 card), formatted, free KB. */
 void GetInfo(lifted::Context& c);
